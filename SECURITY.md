@@ -1,0 +1,2 @@
+# Security
+Report vulnerabilities privately to the repository owner. Never commit `.env`, ImageKit keys, database backups, or logs. The private ImageKit key is server-only. Rotate `SECRET_KEY` to invalidate sessions after suspected compromise. Keep Python dependencies, Nginx, PM2, and the OS patched. Use HTTPS in production, a strong administrator password, restrictive filesystem permissions for `.env` and SQLite, and firewall port 8000 from public access.

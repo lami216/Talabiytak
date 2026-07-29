@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>دفعات الاستيراد</h1><div class="list">{% for b in batches %}<a href="/imports/{{ b.id }}"><strong>{{ b.original_filename }}</strong><span>{{ b.status }} — {{ b.created_at.strftime('%Y-%m-%d %H:%M') }}</span></a>{% else %}<p>لا توجد دفعات استيراد.</p>{% endfor %}</div>{% endblock %}
