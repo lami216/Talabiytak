@@ -2,11 +2,6 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 
 
-def get_db(request: Request):
-    with request.app.state.session_factory() as session:
-        yield session
-
-
 def session_data(request):
     return request.app.state.security.load(
         request.cookies.get(request.app.state.settings.session_cookie_name)
