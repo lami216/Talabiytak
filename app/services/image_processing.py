@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 from app.config import Settings
 from app.services.errors import ImageProcessingError
@@ -32,45 +32,37 @@ class ImageProcessingService:
             with BytesIO(data) as source, Image.open(source) as opened:
                 opened.load()
                 original = (opened.format or "").upper()
-                if original not in {"PNG", "JPEG", "WEBP", "GIF"}:
+                formats = {
+                    "PNG": ("png", "image/png"),
+                    "JPEG": ("jpg", "image/jpeg"),
+                    "WEBP": ("webp", "image/webp"),
+                    "GIF": ("gif", "image/gif"),
+                }
+                if original not in formats:
                     raise ImageProcessingError("تنسيق الصورة غير مدعوم")
-                if original == "GIF" and getattr(opened, "n_frames", 1) > 1:
-                    raise ImageProcessingError("صور GIF المتحركة غير مدعومة")
                 if (
                     opened.width > self.settings.image_max_width
                     or opened.height > self.settings.image_max_height
                     or opened.width * opened.height > self.settings.image_max_pixels
                 ):
                     raise ImageProcessingError("أبعاد الصورة تتجاوز الحد المسموح")
-                image = ImageOps.exif_transpose(opened).copy()
-            try:
-                has_alpha = image.mode in ("RGBA", "LA") or (
-                    image.mode == "P" and "transparency" in image.info
-                )
-                output = BytesIO()
-                if has_alpha:
-                    normalized = image.convert("RGBA")
-                    fmt, ext, mime = "PNG", "png", "image/png"
-                    normalized.save(output, "PNG", optimize=True)
-                else:
-                    normalized = image.convert("RGB")
-                    fmt, ext, mime = "JPEG", "jpg", "image/jpeg"
-                    normalized.save(output, "JPEG", quality=90, optimize=True, progressive=True)
-                normalized.close()
-                payload = output.getvalue()
-                output.close()
+                width, height = opened.width, opened.height
+                extension, mime_type = formats[original]
+
+                # Pillow is used only to validate the image. Re-encoding here used to change PNG,
+                # WEBP and GIF files (often into JPEG), alter their byte size, discard metadata,
+                # and make the ImageKit object differ from the workbook media. Upload the exact
+                # bytes embedded in XLSX after validation instead.
                 return ProcessedImage(
-                    payload,
-                    mime,
-                    ext,
-                    image.width,
-                    image.height,
-                    sha256(payload).hexdigest(),
+                    data,
+                    mime_type,
+                    extension,
+                    width,
+                    height,
+                    sha256(data).hexdigest(),
                     original,
-                    fmt,
+                    original,
                 )
-            finally:
-                image.close()
         except ImageProcessingError:
             raise
         except (UnidentifiedImageError, OSError, ValueError) as exc:
