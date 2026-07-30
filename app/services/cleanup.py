@@ -1,64 +1,43 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
-
-from app.models import ImageStatus, ImportedImage, Product
+from app.models import ImageStatus
 
 
 class ImportCleanupService:
-    def __init__(self, imagekit):
-        self.imagekit = imagekit
+    def __init__(self, storage, products, images):
+        self.storage, self.products, self.images = storage, products, images
 
-    def cleanup(self, s, images, dry_run=False):
+    async def cleanup(self, images, dry_run=False):
         result = {"deleted": 0, "failed": 0, "skipped": 0}
         for image in images:
             if (
                 image.status not in {ImageStatus.unnamed.value, ImageStatus.ignored.value}
                 or image.linked_product_id
-                or not image.imagekit_file_id
+                or not image.image_asset
             ):
                 result["skipped"] += 1
                 continue
-            refs = (
-                s.scalar(
-                    select(func.count(Product.id)).where(
-                        Product.imagekit_file_id == image.imagekit_file_id
-                    )
-                )
-                or 0
-            ) + (
-                s.scalar(
-                    select(func.count(ImportedImage.id)).where(
-                        ImportedImage.imagekit_file_id == image.imagekit_file_id,
-                        ImportedImage.id != image.id,
-                        ImportedImage.status != ImageStatus.deleted.value,
-                    )
-                )
-                or 0
-            )
+            file_id = image.image_asset.file_id
+            refs = await self.products.asset_references(
+                file_id
+            ) + await self.images.asset_references(file_id, image.id)
             if refs:
                 result["skipped"] += 1
                 continue
             if not dry_run:
                 try:
-                    self.imagekit.delete(image.imagekit_file_id)
-                    image.status = ImageStatus.deleted.value
-                    image.imagekit_file_id = None
-                    image.imagekit_file_path = None
-                    image.image_url = None
-                    image.thumbnail_url = None
-                    s.commit()
+                    await self.storage.delete(file_id)
+                    image.status, image.image_asset = ImageStatus.deleted.value, None
+                    await self.images.update(image)
                 except Exception:
-                    s.rollback()
                     result["failed"] += 1
                     continue
             result["deleted"] += 1
         return result
 
-    def abandoned(self, s, days):
-        return s.scalars(
-            select(ImportedImage).where(
-                ImportedImage.created_at < datetime.now(UTC) - timedelta(days=days),
-                ImportedImage.status.in_([ImageStatus.unnamed.value, ImageStatus.ignored.value]),
-            )
-        ).all()
+    async def cleanup_import(self, import_id, dry_run=False):
+        return await self.cleanup(await self.images.list_images(import_id, size=10000), dry_run)
+
+    async def cleanup_abandoned(self, days, dry_run=False):
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        return await self.cleanup(await self.images.abandoned(cutoff), dry_run)

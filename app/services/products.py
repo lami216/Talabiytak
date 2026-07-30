@@ -1,139 +1,154 @@
-from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session
+import logging
 
-from app.models import ImageStatus, ImportedImage, Product
+from app.models import ImageAsset, ImageStatus, Product
 from app.services.arabic import ArabicNormalizationService
 from app.services.errors import ValidationError
+from app.utils.objectid import new_id
+
+log = logging.getLogger(__name__)
 
 
 class ProductService:
-    def __init__(self, imagekit, normalizer=None):
-        self.imagekit = imagekit
+    def __init__(self, storage, products, images, orphans, normalizer=None):
+        self.storage, self.products, self.images, self.orphans = storage, products, images, orphans
         self.normalizer = normalizer or ArabicNormalizationService()
 
-    def create_from_import(self, s: Session, image_id: int, name: str):
+    def _name(self, name):
         name = name.strip()
         if not name:
             raise ValidationError("اسم المنتج مطلوب")
-        image = s.get(ImportedImage, image_id)
+        return name
+
+    async def create_from_import(self, image_id, name):
+        name = self._name(name)
+        image = await self.images.get(image_id)
         if (
             not image
-            or not image.imagekit_file_id
+            or not image.image_asset
             or image.status in {ImageStatus.deleted.value, ImageStatus.upload_failed.value}
         ):
             raise ValidationError("الصورة غير متاحة")
-        p = Product(
-            name=name,
-            normalized_name=self.normalizer.normalize(name),
-            imagekit_file_id=image.imagekit_file_id,
-            imagekit_file_path=image.imagekit_file_path,
-            image_url=image.image_url,
-            thumbnail_url=image.thumbnail_url,
-            image_sha256=image.sha256,
-            image_mime_type=image.mime_type,
-            image_width=image.width,
-            image_height=image.height,
-            source_imported_image_id=image.id,
+        product = Product(
+            new_id(),
+            name,
+            self.normalizer.normalize(name),
+            image.image_asset,
+            {
+                "source": "import",
+                "source_import_id": image.import_id,
+                "source_imported_image_id": image.id,
+            },
         )
-        s.add(p)
-        s.flush()
-        image.linked_product_id = p.id
-        image.status = ImageStatus.saved_as_product.value
-        s.commit()
-        self.imagekit.update_tags(p.imagekit_file_id, ["product-image-manager", "product"])
-        return p
+        await self.products.create(product)
+        try:
+            await self.images.link_product(image.id, product.id)
+        except Exception:
+            await self.products.delete(product.id)
+            raise
+        await self.storage.update_tags(
+            product.primary_image.file_id, ["product-image-manager", "product"]
+        )
+        return product
 
-    def create_manual(self, s, name, processed):
-        name = name.strip()
-        if not name:
-            raise ValidationError("اسم المنتج مطلوب")
-        asset = self.imagekit.upload(
-            processed.data, processed.extension, tags=["product-image-manager", "product"]
+    async def create_manual(self, name, processed):
+        name = self._name(name)
+        reusable = await self.products.find_by_hash(processed.sha256)
+        if not reusable:
+            reusable = await self.images.find_duplicate_by_hash(processed.sha256)
+        if reusable:
+            asset = (
+                reusable.primary_image if isinstance(reusable, Product) else reusable.image_asset
+            )
+            product = Product(
+                new_id(),
+                name,
+                self.normalizer.normalize(name),
+                asset,
+                {"source": "manual"},
+            )
+            return await self.products.create(product)
+        stored = await self.storage.upload(
+            processed.data, processed.extension, purpose="product", correlation_id=processed.sha256
+        )
+        asset = ImageAsset(
+            stored.file_id,
+            stored.file_path,
+            stored.url,
+            stored.thumbnail_url,
+            processed.sha256,
+            processed.mime_type,
+            processed.width,
+            processed.height,
+        )
+        product = Product(
+            new_id(), name, self.normalizer.normalize(name), asset, {"source": "manual"}
         )
         try:
-            p = Product(
-                name=name,
-                normalized_name=self.normalizer.normalize(name),
-                imagekit_file_id=asset.file_id,
-                imagekit_file_path=asset.file_path,
-                image_url=asset.url,
-                thumbnail_url=asset.thumbnail_url,
-                image_sha256=processed.sha256,
-                image_mime_type=processed.mime_type,
-                image_width=processed.width,
-                image_height=processed.height,
-            )
-            s.add(p)
-            s.commit()
-            return p
-        except Exception:
-            s.rollback()
-            self.imagekit.delete(asset.file_id)
+            return await self.products.create(product)
+        except Exception as exc:
+            await self._rollback(stored.file_id, f"product save failed: {exc}")
             raise
 
-    def search(self, s, q, page=1, size=24):
-        stmt = select(Product)
-        norm = self.normalizer.normalize(q)
-        if norm:
-            rank = case(
-                (Product.normalized_name == norm, 0),
-                (Product.normalized_name.like(norm + "%"), 1),
-                else_=2,
-            )
-            stmt = stmt.where(Product.normalized_name.like(f"%{norm}%")).order_by(
-                rank, Product.created_at.desc()
-            )
-        else:
-            stmt = stmt.order_by(Product.created_at.desc())
-        total = s.scalar(select(func.count()).select_from(stmt.subquery()))
-        return s.scalars(stmt.offset((page - 1) * size).limit(size)).all(), total
-
-    def rename(self, s, p, name):
-        name = name.strip()
-        if not name:
-            raise ValidationError("اسم المنتج مطلوب")
-        p.name = name
-        p.normalized_name = self.normalizer.normalize(name)
-        s.commit()
-
-    def referenced(self, s, file_id, exclude_product=None):
-        pc = s.scalar(
-            select(func.count(Product.id)).where(
-                Product.imagekit_file_id == file_id,
-                Product.id != exclude_product if exclude_product else Product.id > 0,
-            )
-        )
-        ic = s.scalar(
-            select(func.count(ImportedImage.id)).where(ImportedImage.imagekit_file_id == file_id)
-        )
-        return (pc or 0) + (ic or 0)
-
-    def replace(self, s, p, processed):
-        asset = self.imagekit.upload(
-            processed.data, processed.extension, tags=["product-image-manager", "product"]
-        )
-        old = p.imagekit_file_id
+    async def _rollback(self, file_id, reason):
         try:
-            p.imagekit_file_id = asset.file_id
-            p.imagekit_file_path = asset.file_path
-            p.image_url = asset.url
-            p.thumbnail_url = asset.thumbnail_url
-            p.image_sha256 = processed.sha256
-            p.image_mime_type = processed.mime_type
-            p.image_width = processed.width
-            p.image_height = processed.height
-            s.commit()
-        except Exception:
-            s.rollback()
-            self.imagekit.delete(asset.file_id)
-            raise
-        if not self.referenced(s, old):
-            self.imagekit.delete(old)
+            await self.storage.delete(file_id)
+        except Exception as exc:
+            log.exception("ImageKit rollback failed", extra={"file_id": file_id})
+            await self.orphans.record(file_id, f"{reason}: {exc}")
 
-    def delete(self, s, p):
-        file_id = p.imagekit_file_id
-        pid = p.id
-        s.delete(p)
-        s.commit()
-        if not self.referenced(s, file_id, exclude_product=pid):
-            self.imagekit.delete(file_id)
+    async def search(self, query, page=1, size=24):
+        return await self.products.search(self.normalizer.normalize(query), page, size)
+
+    async def get(self, product_id):
+        return await self.products.get(product_id)
+
+    async def rename(self, product_id, name):
+        product = await self._required(product_id)
+        product.name = self._name(name)
+        product.normalized_name = self.normalizer.normalize(product.name)
+        return await self.products.update(product)
+
+    async def replace(self, product_id, processed):
+        product = await self._required(product_id)
+        stored = await self.storage.upload(
+            processed.data, processed.extension, purpose="product", correlation_id=processed.sha256
+        )
+        old = product.primary_image
+        product.primary_image = ImageAsset(
+            stored.file_id,
+            stored.file_path,
+            stored.url,
+            stored.thumbnail_url,
+            processed.sha256,
+            processed.mime_type,
+            processed.width,
+            processed.height,
+        )
+        try:
+            await self.products.update(product)
+        except Exception as exc:
+            await self._rollback(stored.file_id, f"product update failed: {exc}")
+            raise
+        if not await self._referenced(old.file_id):
+            await self.storage.delete(old.file_id)
+        return product
+
+    async def delete(self, product_id):
+        product = await self.products.get(product_id)
+        if not product:
+            return
+        await self.products.delete(product_id)
+        if not await self._referenced(product.primary_image.file_id, product_id):
+            await self.storage.delete(product.primary_image.file_id)
+
+    async def _required(self, product_id):
+        product = await self.products.get(product_id)
+        if not product:
+            raise ValidationError("المنتج غير موجود")
+        return product
+
+    async def _referenced(self, file_id, exclude_product=None):
+        return (
+            await self.products.asset_references(file_id, exclude_product)
+            + await self.images.asset_references(file_id)
+        ) > 0
