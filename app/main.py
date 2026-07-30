@@ -31,7 +31,7 @@ def create_app(settings: Settings | None = None, imagekit_client=None):
     app.state.session_factory = make_session_factory(app.state.engine)
     app.state.security = Security(settings)
     app.state.templates = Jinja2Templates(directory=BASE / "templates")
-    app.state.imagekit = ImageKitService(settings, imagekit_client)
+    app.state.imagekit = ImageKitService(settings=settings, client=imagekit_client)
     app.state.processor = ImageProcessingService(settings)
     app.state.excel_import = ExcelImportService(settings, app.state.processor, app.state.imagekit)
     app.state.products = ProductService(app.state.imagekit, ArabicNormalizationService())

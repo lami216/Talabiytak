@@ -9,6 +9,7 @@ from app.config import Settings
 from app.models import ImportedImage, Product
 from app.services.arabic import ArabicNormalizationService
 from app.services.errors import ImageProcessingError
+from app.services.imagekit import ImageKitService
 
 
 def image_bytes(fmt="PNG", color="red", animated=False):
@@ -50,6 +51,27 @@ def test_missing_imagekit_rejected(monkeypatch):
             imagekit_public_key="x",
             imagekit_url_endpoint="https://x.example",
         )
+
+
+def test_imagekit_service_uses_complete_sdk_configuration(monkeypatch, setup):
+    _, app, fake, _ = setup
+    captured = {}
+
+    class ImageKit:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("imagekitio.ImageKit", ImageKit)
+
+    service = ImageKitService(app.state.settings)
+
+    assert captured == {
+        "public_key": "public-test",
+        "private_key": "private-test",
+        "url_endpoint": "https://ik.imagekit.io/test",
+    }
+    assert isinstance(service.client, ImageKit)
+    assert app.state.imagekit.client is fake
 
 
 def test_auth_redirect_csrf_and_health(setup, auth):
