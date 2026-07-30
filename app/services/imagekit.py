@@ -51,21 +51,11 @@ class ImageKitService:
         for attempt in range(3):
             try:
                 result = self.client.file.upload(file=payload, file_name=filename, options=options)
-                raw = getattr(result, "response_metadata", None)
-                raw = getattr(raw, "raw", None) or result
-
-                def get(k, response=raw):
-                    return (
-                        response.get(k)
-                        if isinstance(response, dict)
-                        else getattr(response, k, None)
-                    )
-
                 return Asset(
-                    get("fileId") or get("file_id"),
-                    get("filePath") or get("file_path"),
-                    get("url"),
-                    get("thumbnailUrl") or get("thumbnail_url") or get("url"),
+                    result.file_id,
+                    result.file_path,
+                    result.url,
+                    result.thumbnail_url or result.url,
                 )
             except Exception as exc:
                 last = exc
