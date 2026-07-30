@@ -85,6 +85,9 @@ async def test_repositories_and_indexes(database):
     assert (await products.get(product.id)).primary_image.file_id == "f1"
     assert (await products.search("منتج"))[1] == 1
     assert (await images.list_images(batch.id))[0].import_id == batch.id
+    assert await images.status_counts(batch.id) == {ImageStatus.unnamed.value: 1}
+    assert (await imports.list())[0].id == batch.id
+    assert (await products.recent())[0].id == product.id
 
 
 def test_auth_csrf_health_and_readiness(auth):
@@ -136,6 +139,8 @@ def test_import_duplicate_product_and_cleanup(auth):
     assert not list(tmp.rglob("*.xlsx"))
     raw_images = list(database.raw.imported_images.find().sort("sequence_number"))
     assert [x["status"] for x in raw_images] == ["unnamed", "duplicate", "invalid_image"]
+    import_id = str(raw_images[0]["import_id"])
+    assert client.get(f"/imports/{import_id}").status_code == 200
     image_id = str(raw_images[0]["_id"])
     assert (
         client.post(
