@@ -10,7 +10,7 @@ from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils.units import pixels_to_EMU
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.services.errors import AppError, ValidationError
 
@@ -72,14 +72,14 @@ class ExcelExportService:
         sheet.sheet_view.rightToLeft = False
         sheet.merge_cells("A1:C1")
         sheet["A1"] = order.title
-        sheet["A1"].font = Font(bold=True, size=16)
+        sheet["A1"].font = Font(name="Arial", bold=True, size=16, color="000000")
         sheet["A1"].alignment = Alignment(horizontal="center", vertical="center", readingOrder=2)
         sheet.row_dimensions[1].height = 26
         headers = ("الصورة", "اسم المنتج", "الكمية")
         border = Border(*([Side(style="thin", color="888888")] * 4))
         for col, value in enumerate(headers, 1):
             cell = sheet.cell(3, col, value)
-            cell.font = Font(bold=True)
+            cell.font = Font(name="Arial", bold=True, size=13, color="000000")
             cell.fill = PatternFill("solid", fgColor="DDEFE9")
             cell.alignment = Alignment(horizontal="center", vertical="center", readingOrder=2)
             cell.border = border
@@ -89,29 +89,43 @@ class ExcelExportService:
             for row, (item, raw) in enumerate(
                 zip(sorted(order.items, key=lambda i: i.position), pictures, strict=True), 4
             ):
+                converted = BytesIO()
                 try:
                     with Image.open(BytesIO(raw)) as source:
                         source.verify()
                     with Image.open(BytesIO(raw)) as source:
-                        source.thumbnail((90, 90), Image.Resampling.LANCZOS)
-                        converted = BytesIO()
-                        source.convert("RGBA").save(converted, "PNG")
+                        oriented = ImageOps.exif_transpose(source)
+                        try:
+                            with oriented.convert("RGB") as rgb_source:
+                                fitted = ImageOps.fit(
+                                    rgb_source,
+                                    (72, 72),
+                                    method=Image.Resampling.LANCZOS,
+                                    centering=(0.5, 0.5),
+                                )
+                            try:
+                                fitted.save(converted, "PNG")
+                            finally:
+                                fitted.close()
+                        finally:
+                            if oriented is not source:
+                                oriented.close()
                     converted.seek(0)
-                    keepalive.append(converted)
                     picture = ExcelImage(converted)
                 except (UnidentifiedImageError, OSError) as exc:
+                    converted.close()
                     raise AppError("الصورة غير صالحة.") from exc
-                margin = pixels_to_EMU(4)
+                keepalive.append(converted)
                 picture.anchor = OneCellAnchor(
-                    _from=AnchorMarker(col=0, colOff=margin, row=row - 1, rowOff=margin),
-                    ext=XDRPositiveSize2D(
-                        cx=pixels_to_EMU(picture.width), cy=pixels_to_EMU(picture.height)
-                    ),
+                    _from=AnchorMarker(col=0, colOff=0, row=row - 1, rowOff=0),
+                    ext=XDRPositiveSize2D(cx=pixels_to_EMU(72), cy=pixels_to_EMU(72)),
                 )
                 sheet.add_image(picture)
-                sheet.cell(row, 2, item.product_name)
-                sheet.cell(row, 3, item.quantity)
-                sheet.row_dimensions[row].height = 72
+                name_cell = sheet.cell(row, 2, item.product_name)
+                name_cell.font = Font(name="Arial", size=14, bold=True, color="000000")
+                quantity_cell = sheet.cell(row, 3, item.quantity)
+                quantity_cell.font = Font(name="Arial", size=13, bold=True, color="000000")
+                sheet.row_dimensions[row].height = 54
                 for col in range(1, 4):
                     sheet.cell(row, col).alignment = Alignment(
                         horizontal="center",
@@ -120,9 +134,9 @@ class ExcelExportService:
                         readingOrder=2 if col == 2 else 0,
                     )
                     sheet.cell(row, col).border = border
-            sheet.column_dimensions["A"].width = 15
-            sheet.column_dimensions["B"].width = 32
-            sheet.column_dimensions["C"].width = 12
+            sheet.column_dimensions["A"].width = 9.5
+            sheet.column_dimensions["B"].width = 25
+            sheet.column_dimensions["C"].width = 9
             sheet.freeze_panes = "A4"
             output = BytesIO()
             workbook.save(output)
