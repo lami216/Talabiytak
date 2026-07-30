@@ -46,7 +46,8 @@ class ImportsRepository:
         return await self.update(import_id, status=status, **kwargs)
 
     async def list(self, limit=100):
-        docs = await self.collection.find({}).sort("created_at", -1).limit(limit).to_list()
+        cursor = self.collection.find({}).sort("created_at", -1).limit(limit)
+        docs = await cursor.to_list(length=None)
         return [import_from_doc(d) for d in docs]
 
     async def count(self):

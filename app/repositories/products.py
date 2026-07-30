@@ -36,13 +36,13 @@ class ProductsRepository:
             {"normalized_name": {"$regex": re.escape(normalized_query)}} if normalized_query else {}
         )
         total = await self.collection.count_documents(query)
-        docs = (
-            await self.collection.find(query)
+        cursor = (
+            self.collection.find(query)
             .sort("created_at", -1)
             .skip((max(page, 1) - 1) * size)
             .limit(size)
-            .to_list()
         )
+        docs = await cursor.to_list(length=None)
         items = [product_from_doc(d) for d in docs]
         if normalized_query:
             items.sort(
@@ -86,5 +86,6 @@ class ProductsRepository:
         return await self.collection.count_documents(query)
 
     async def recent(self, limit=6):
-        docs = await self.collection.find({}).sort("created_at", -1).limit(limit).to_list()
+        cursor = self.collection.find({}).sort("created_at", -1).limit(limit)
+        docs = await cursor.to_list(length=None)
         return [product_from_doc(d) for d in docs]

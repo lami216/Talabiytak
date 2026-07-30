@@ -94,22 +94,23 @@ class ImportedImagesRepository:
         query = {"import_id": oid(import_id, "معرّف الاستيراد")}
         if status != "all":
             query["status"] = status
-        docs = (
-            await self.collection.find(query)
+        cursor = (
+            self.collection.find(query)
             .sort("sequence_number", 1)
             .skip((max(page, 1) - 1) * size)
             .limit(size)
-            .to_list()
         )
+        docs = await cursor.to_list(length=None)
         return [image_from_doc(d) for d in docs]
 
     async def status_counts(self, import_id):
-        rows = await self.collection.aggregate(
+        cursor = await self.collection.aggregate(
             [
                 {"$match": {"import_id": oid(import_id)}},
                 {"$group": {"_id": "$status", "count": {"$sum": 1}}},
             ]
-        ).to_list()
+        )
+        rows = await cursor.to_list(length=None)
         return {row["_id"]: row["count"] for row in rows}
 
     async def count(self, status=None):
@@ -122,7 +123,8 @@ class ImportedImagesRepository:
         return await self.collection.count_documents(query)
 
     async def abandoned(self, cutoff):
-        docs = await self.collection.find(
+        cursor = self.collection.find(
             {"created_at": {"$lt": cutoff}, "status": {"$in": ["unnamed", "ignored"]}}
-        ).to_list()
+        )
+        docs = await cursor.to_list(length=None)
         return [image_from_doc(d) for d in docs]

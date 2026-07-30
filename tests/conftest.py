@@ -49,7 +49,7 @@ class AsyncCollection:
     def find(self, *args, **kwargs):
         return AsyncCursor(self.raw.find(*args, **kwargs))
 
-    def aggregate(self, *args, **kwargs):
+    async def aggregate(self, *args, **kwargs):
         return AsyncCursor(self.raw.aggregate(*args, **kwargs))
 
     async def find_one(self, *args, **kwargs):
