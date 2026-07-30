@@ -14,3 +14,16 @@ Deploy the fixed application before accepting another workbook import. Images th
 corrupted in ImageKit cannot be repaired by this code change: delete those ImageKit files, remove
 their related test/import records where appropriate, and upload the original XLSX again. The exact
 original bytes cannot be recovered from a corrupted ImageKit object without the original workbook.
+
+
+## Phase two deployment verification
+
+```bash
+pip install -e .
+python -m app.cli init-db
+python -m app.cli check-db
+pytest -q
+pm2 restart product-image-manager --update-env
+```
+
+`init-db` creates the `orders_expires_at_ttl` TTL index. Excel exports are generated only in memory on each download and require no persistent export directory.

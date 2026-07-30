@@ -10,15 +10,23 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import Settings, get_settings
 from app.database import close_mongo, create_mongo
-from app.repositories import ImportedImagesRepository, ImportsRepository, ProductsRepository
+from app.repositories import (
+    ImportedImagesRepository,
+    ImportsRepository,
+    OrdersRepository,
+    ProductsRepository,
+)
 from app.repositories.orphans import OrphanCleanupRepository
+from app.routes.orders import router as orders_router
 from app.routes.web import router
 from app.security.core import Security
 from app.services.catalog import CatalogQueryService
 from app.services.cleanup import ImportCleanupService
 from app.services.errors import AppError
+from app.services.excel_export import ExcelExportService
 from app.services.image_processing import ImageProcessingService
 from app.services.imports import ImportService
+from app.services.orders import OrderService
 from app.services.products import ProductService
 from app.services.storage import ImageKitStorage
 
@@ -30,19 +38,28 @@ def configure_services(app, database, storage):
     imports = ImportsRepository(database)
     images = ImportedImagesRepository(database)
     products = ProductsRepository(database)
+    orders = OrdersRepository(database)
     orphans = OrphanCleanupRepository(database)
     processor = ImageProcessingService(app.state.settings)
     app.state.imports = ImportService(
         app.state.settings, processor, storage, imports, images, products, orphans
     )
-    app.state.products = ProductService(storage, products, images, orphans)
+    app.state.products = ProductService(storage, products, images, orphans, orders=orders)
+    app.state.orders = OrderService(app.state.settings, orders, products)
+    app.state.excel_export = ExcelExportService(app.state.settings, products)
     app.state.cleanup = ImportCleanupService(storage, products, images)
-    app.state.catalog = CatalogQueryService(database, imports, images, products)
+    app.state.catalog = CatalogQueryService(database, imports, images, products, orders)
     app.state.processor = processor
     app.state.repositories = type(
         "Repositories",
         (),
-        {"imports": imports, "images": images, "products": products, "orphans": orphans},
+        {
+            "imports": imports,
+            "images": images,
+            "products": products,
+            "orders": orders,
+            "orphans": orphans,
+        },
     )()
     app.state.storage = storage
 
@@ -83,6 +100,7 @@ def create_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_host_list)
     app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
     app.include_router(router)
+    app.include_router(orders_router)
 
     @app.middleware("http")
     async def headers(request: Request, call_next):

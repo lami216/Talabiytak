@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     session_max_age_seconds: int = 43200
     trusted_hosts: str = "localhost,127.0.0.1"
     abandoned_import_retention_days: int = 30
+    order_retention_days: int = 30
+    max_order_items: int = 500
+    excel_image_timeout_seconds: int = 20
+    excel_image_max_mb: int = 25
 
     @field_validator("secret_key")
     @classmethod

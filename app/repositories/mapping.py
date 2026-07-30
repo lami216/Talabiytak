@@ -1,4 +1,4 @@
-from app.models import ImageAsset, Import, ImportedImage, Product
+from app.models import ImageAsset, Import, ImportedImage, Order, OrderItem, Product
 from app.utils.objectid import serialize_id, to_object_id
 
 
@@ -70,6 +70,22 @@ def product_from_doc(doc):
         metadata=doc.get("metadata", {}),
         created_at=doc["created_at"],
         updated_at=doc["updated_at"],
+    )
+
+
+def order_from_doc(doc):
+    return Order(
+        id=serialize_id(doc["_id"]),
+        title=doc["title"],
+        items=[
+            OrderItem(
+                serialize_id(i["product_id"]), i["product_name"], i["quantity"], i["position"]
+            )
+            for i in doc.get("items", [])
+        ],
+        created_at=doc["created_at"],
+        updated_at=doc["updated_at"],
+        expires_at=doc["expires_at"],
     )
 
 

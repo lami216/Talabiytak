@@ -9,9 +9,10 @@ log = logging.getLogger(__name__)
 
 
 class ProductService:
-    def __init__(self, storage, products, images, orphans, normalizer=None):
+    def __init__(self, storage, products, images, orphans, normalizer=None, orders=None):
         self.storage, self.products, self.images, self.orphans = storage, products, images, orphans
         self.normalizer = normalizer or ArabicNormalizationService()
+        self.orders = orders
 
     def _name(self, name):
         name = name.strip()
@@ -151,6 +152,8 @@ class ProductService:
         product = await self.products.get(product_id)
         if not product:
             return
+        if self.orders and await self.orders.active_product_references(product_id):
+            raise ValidationError("لا يمكن حذف المنتج لأنه مستخدم في طلبية ما زالت فعالة.")
         await self.products.delete(product_id)
         if not await self._referenced(product.primary_image.file_id, product_id):
             await self.storage.delete(product.primary_image.file_id)

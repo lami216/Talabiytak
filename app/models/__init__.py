@@ -123,4 +123,32 @@ class Product:
         return self.primary_image.thumbnail_url
 
 
-__all__ = ["ImageAsset", "ImageStatus", "Import", "ImportedImage", "ImportStatus", "Product", "now"]
+@dataclass
+class OrderItem:
+    product_id: str
+    product_name: str
+    quantity: int
+    position: int
+
+
+@dataclass
+class Order:
+    id: str
+    title: str
+    items: list[OrderItem]
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+    expires_at: datetime | None = None
+
+
+__all__ = [
+    "ImageAsset",
+    "ImageStatus",
+    "Import",
+    "ImportedImage",
+    "ImportStatus",
+    "Order",
+    "OrderItem",
+    "Product",
+    "now",
+]
