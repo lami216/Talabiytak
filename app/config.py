@@ -1,5 +1,5 @@
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,6 +64,16 @@ class Settings(BaseSettings):
         """Return the CSP-safe origin without ImageKit's account path."""
         parsed = urlparse(self.imagekit_url_endpoint)
         return f"{parsed.scheme}://{parsed.netloc}"
+
+    def imagekit_delivery_url(self, file_path: str) -> str:
+        """Build a stable delivery URL from ImageKit's authoritative file path.
+
+        Upload API response URLs (and especially thumbnail URLs) are not guaranteed to use the
+        configured delivery endpoint.  Building the URL here also keeps it on the CSP-allowed
+        origin and repairs display of records that contain stale response URLs.
+        """
+        path = quote(file_path.lstrip("/"), safe="/@!$&'()*+,;=:-._~")
+        return f"{self.imagekit_url_endpoint.rstrip('/')}/{path}"
 
     @property
     def secure_cookies(self):
