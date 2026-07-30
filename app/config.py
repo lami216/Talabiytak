@@ -60,6 +60,12 @@ class Settings(BaseSettings):
         return [x.strip() for x in self.trusted_hosts.split(",") if x.strip()]
 
     @property
+    def imagekit_origin(self) -> str:
+        """Return the CSP-safe origin without ImageKit's account path."""
+        parsed = urlparse(self.imagekit_url_endpoint)
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    @property
     def secure_cookies(self):
         return self.app_env.lower() == "production"
 

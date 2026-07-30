@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from imagekitio import ImageKit
 from imagekitio.models.UpdateFileRequestOptions import UpdateFileRequestOptions
@@ -52,12 +53,21 @@ class ImageKitStorage:
                 try:
                     result = self.files.upload(file=data, file_name=filename, options=options)
                     raw = getattr(getattr(result, "response_metadata", None), "raw", {})
-                    return StoredAsset(
-                        getattr(result, "file_id", raw.get("fileId")),
-                        getattr(result, "file_path", raw.get("filePath")),
-                        getattr(result, "url", raw.get("url")),
-                        getattr(result, "thumbnail_url", raw.get("thumbnailUrl") or raw.get("url")),
+                    file_id = getattr(result, "file_id", None) or raw.get("fileId")
+                    file_path = getattr(result, "file_path", None) or raw.get("filePath")
+                    url = getattr(result, "url", None) or raw.get("url")
+                    thumbnail_url = getattr(result, "thumbnail_url", None) or raw.get(
+                        "thumbnailUrl"
                     )
+                    parsed_url = urlparse(url or "")
+                    if (
+                        not file_id
+                        or not file_path
+                        or parsed_url.scheme != "https"
+                        or not parsed_url.netloc
+                    ):
+                        raise ImageKitError("استجابة ImageKit لا تحتوي على بيانات الصورة المطلوبة")
+                    return StoredAsset(file_id, file_path, url, thumbnail_url)
                 except Exception as exc:
                     last = exc
                     if attempt < 2:

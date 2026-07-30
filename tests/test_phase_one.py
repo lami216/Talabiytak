@@ -10,7 +10,7 @@ from app.database import ensure_indexes, verify_database
 from app.models import ImageAsset, ImageStatus, ImportedImage, Product
 from app.repositories import ImportedImagesRepository, ImportsRepository, ProductsRepository
 from app.services.arabic import ArabicNormalizationService
-from app.services.errors import ImageProcessingError, ValidationError
+from app.services.errors import ImageKitError, ImageProcessingError, ValidationError
 from app.utils.objectid import serialize_id, to_object_id
 
 
@@ -99,6 +99,10 @@ def test_auth_csrf_health_and_readiness(auth):
     token = app.state.security.load(client.cookies[app.state.settings.session_cookie_name])["csrf"]
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/ready").status_code == 200
+    csp = client.get("/").headers["content-security-policy"]
+    img_src = csp.split("img-src ", 1)[1].split(";", 1)[0]
+    assert "https://ik.imagekit.io" in img_src.split()
+    assert "https://ik.imagekit.io/test" not in img_src.split()
     assert client.post("/logout", data={"csrf_token": "bad"}).status_code == 400
     assert (
         client.post("/logout", data={"csrf_token": token}, follow_redirects=False).status_code
@@ -115,6 +119,21 @@ def test_processing_and_normalization(auth):
         assert processed.width == 20 and len(processed.sha256) == 64
     with pytest.raises(ImageProcessingError):
         app.state.processor.process(image_bytes("GIF", animated=True))
+
+
+@pytest.mark.asyncio
+async def test_imagekit_upload_requires_complete_response(auth, monkeypatch):
+    _, app, fake, *_ = auth
+
+    class IncompleteResult:
+        file_id = ""
+        file_path = "/test/incomplete.jpg"
+        url = ""
+        thumbnail_url = None
+
+    monkeypatch.setattr(fake.files, "upload", lambda **kwargs: IncompleteResult())
+    with pytest.raises(ImageKitError, match="فشل رفع الصورة"):
+        await app.state.storage.upload(b"image", "jpg")
 
 
 def test_import_duplicate_product_and_cleanup(auth):
@@ -140,7 +159,10 @@ def test_import_duplicate_product_and_cleanup(auth):
     raw_images = list(database.raw.imported_images.find().sort("sequence_number"))
     assert [x["status"] for x in raw_images] == ["unnamed", "duplicate", "invalid_image"]
     import_id = str(raw_images[0]["import_id"])
-    assert client.get(f"/imports/{import_id}").status_code == 200
+    image_url = "https://ik.imagekit.io/test/1.jpg"
+    batch_html = client.get(f"/imports/{import_id}")
+    assert batch_html.status_code == 200
+    assert f'<img src="{image_url}"' in batch_html.text
     image_id = str(raw_images[0]["_id"])
     assert (
         client.post(
@@ -151,9 +173,14 @@ def test_import_duplicate_product_and_cleanup(auth):
         == 200
     )
     assert len(fake.files.uploads) == 1
-    assert "حليب كامل الدسم" in client.get("/products?q=حليب").text
+    products_html = client.get("/products?q=حليب").text
+    assert "حليب كامل الدسم" in products_html
+    assert f'<img src="{image_url}"' in products_html
+    assert f'<img src="{image_url}"' in client.get("/").text
     product = database.raw.products.find_one()
     assert product["metadata"]["source"] == "import"
+    assert product["primary_image"] == raw_images[0]["image_asset"]
+    assert f'<img src="{image_url}"' in client.get(f"/products/{product['_id']}/edit").text
 
 
 @pytest.mark.asyncio
