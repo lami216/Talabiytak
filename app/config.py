@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     secret_key: str
     admin_username: str
     admin_password: str
-    database_url: str
+    mongodb_uri: str
+    mongodb_database: str = "talabiytak"
     imagekit_private_key: str
     imagekit_public_key: str
     imagekit_url_endpoint: str

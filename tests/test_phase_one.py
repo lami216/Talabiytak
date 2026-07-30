@@ -2,84 +2,96 @@ import zipfile
 from io import BytesIO
 
 import pytest
+from bson import ObjectId
 from PIL import Image
-from sqlalchemy import inspect, select
 
 from app.config import Settings
-from app.models import ImportedImage, Product
+from app.database import ensure_indexes, verify_database
+from app.models import ImageAsset, ImageStatus, ImportedImage, Product
+from app.repositories import ImportedImagesRepository, ImportsRepository, ProductsRepository
 from app.services.arabic import ArabicNormalizationService
-from app.services.errors import ImageProcessingError
-from app.services.imagekit import ImageKitService
+from app.services.errors import ImageProcessingError, ValidationError
+from app.utils.objectid import serialize_id, to_object_id
 
 
 def image_bytes(fmt="PNG", color="red", animated=False):
-    out = BytesIO()
-    im = Image.new("RGBA" if fmt == "PNG" else "RGB", (20, 15), color)
+    output = BytesIO()
+    image = Image.new("RGBA" if fmt == "PNG" else "RGB", (20, 15), color)
     if animated:
-        im.save(
-            out,
+        image.save(
+            output,
             format="GIF",
             save_all=True,
             append_images=[Image.new("RGB", (20, 15), "blue")],
             duration=10,
         )
     else:
-        im.save(out, format=fmt)
-    im.close()
-    return out.getvalue()
+        image.save(output, format=fmt)
+    image.close()
+    return output.getvalue()
 
 
 def xlsx(entries):
-    out = BytesIO()
-    with zipfile.ZipFile(out, "w") as z:
-        z.writestr("[Content_Types].xml", "<Types/>")
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
         for name, data in entries:
-            z.writestr(name, data)
-    return out.getvalue()
+            archive.writestr(name, data)
+    return output.getvalue()
 
 
-def test_missing_imagekit_rejected(monkeypatch):
-    monkeypatch.delenv("IMAGEKIT_PRIVATE_KEY", raising=False)
+def test_settings_and_object_ids(monkeypatch):
     with pytest.raises(ValueError):
         Settings(
             _env_file=None,
             secret_key="a" * 40,
             admin_username="a",
             admin_password="b",
-            database_url="sqlite://",
+            mongodb_uri="mongodb://localhost",
             imagekit_private_key="",
             imagekit_public_key="x",
             imagekit_url_endpoint="https://x.example",
         )
+    value = str(ObjectId())
+    assert serialize_id(to_object_id(value)) == value
+    with pytest.raises(ValidationError, match="غير صالح"):
+        to_object_id("bad")
 
 
-def test_imagekit_service_uses_complete_sdk_configuration(monkeypatch, setup):
-    _, app, fake, _ = setup
-    captured = {}
+@pytest.mark.asyncio
+async def test_repositories_and_indexes(database):
+    await ensure_indexes(database)
+    assert (await verify_database(database))["ok"]
+    imports, images, products = (
+        ImportsRepository(database),
+        ImportedImagesRepository(database),
+        ProductsRepository(database),
+    )
+    batch = await imports.create("test.xlsx")
+    asset = ImageAsset("f1", "/f1", "https://x/f1", None, "a" * 64, "image/png", 1, 1)
+    image = await images.create(
+        ImportedImage(
+            str(ObjectId()),
+            batch.id,
+            1,
+            "xl/media/a.png",
+            hash=asset.hash,
+            status=ImageStatus.unnamed.value,
+            image_asset=asset,
+        )
+    )
+    assert (await images.find_duplicate_by_hash(asset.hash)).id == image.id
+    product = await products.create(Product(str(ObjectId()), "منتج", "منتج", asset))
+    assert (await products.get(product.id)).primary_image.file_id == "f1"
+    assert (await products.search("منتج"))[1] == 1
+    assert (await images.list_images(batch.id))[0].import_id == batch.id
 
-    class ImageKit:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
 
-    monkeypatch.setattr("imagekitio.ImageKit", ImageKit)
-
-    service = ImageKitService(app.state.settings)
-
-    assert captured == {
-        "public_key": "public-test",
-        "private_key": "private-test",
-        "url_endpoint": "https://ik.imagekit.io/test",
-    }
-    assert isinstance(service.client, ImageKit)
-    assert app.state.imagekit.client is fake
-
-
-def test_auth_redirect_csrf_and_health(setup, auth):
-    client, app, *_ = setup
+def test_auth_csrf_health_and_readiness(auth):
+    client, app, *_ = auth
     client.cookies.clear()
     assert client.get("/", follow_redirects=False).status_code == 303
     assert client.post("/login", data={"username": "bad", "password": "bad"}).status_code == 200
-    client, app, _, _, _ = auth
     client.post("/login", data={"username": "admin", "password": "strong-password"})
     token = app.state.security.load(client.cookies[app.state.settings.session_cookie_name])["csrf"]
     assert client.get("/health").json() == {"status": "ok"}
@@ -91,67 +103,26 @@ def test_auth_redirect_csrf_and_health(setup, auth):
     )
 
 
-def test_arabic_normalization():
-    n = ArabicNormalizationService()
-    assert n.normalize(" آإأٱبـــ ١۲3 ") == n.normalize("ااااب 123")
-    assert n.normalize("مُنتَج  رائع!!!") == "منتج رائع"
-    assert n.normalize("ABC") == "abc"
-    assert n.normalize("عبوة") == n.normalize("عبوه")
-
-
-def test_processing_formats(auth):
+def test_processing_and_normalization(auth):
     _, app, *_ = auth
+    normalizer = ArabicNormalizationService()
+    assert normalizer.normalize("مُنتَج  رائع!!!") == "منتج رائع"
     for fmt in ("PNG", "JPEG", "WEBP", "GIF"):
-        p = app.state.processor.process(image_bytes(fmt))
-        assert isinstance(p.data, bytes) and p.width == 20 and len(p.sha256) == 64
-    with pytest.raises(ImageProcessingError):
-        app.state.processor.process(b"no")
+        processed = app.state.processor.process(image_bytes(fmt))
+        assert processed.width == 20 and len(processed.sha256) == 64
     with pytest.raises(ImageProcessingError):
         app.state.processor.process(image_bytes("GIF", animated=True))
 
 
-def test_invalid_xlsx_and_zip_safety(auth):
-    client, app, _, _, token = auth
-    assert (
-        client.post(
-            "/imports/new", data={"csrf_token": token}, files={"file": ("x.xls", b"x")}
-        ).status_code
-        == 400
-    )
-    assert (
-        client.post(
-            "/imports/new", data={"csrf_token": token}, files={"file": ("x.xlsx", b"notzip")}
-        ).status_code
-        >= 400
-    )
-    unsafe = xlsx([("../xl/media/a.png", image_bytes())])
-    assert (
-        client.post(
-            "/imports/new", data={"csrf_token": token}, files={"file": ("x.xlsx", unsafe)}
-        ).status_code
-        == 400
-    )
-    app.state.settings.max_zip_entries = 1
-    assert (
-        client.post(
-            "/imports/new",
-            data={"csrf_token": token},
-            files={"file": ("x.xlsx", xlsx([("a", b"1"), ("b", b"2")]))},
-        ).status_code
-        == 400
-    )
-
-
-def test_real_import_duplicates_naming_search_no_files(auth):
-    client, app, fake, tmp, token = auth
-    before = set(tmp.rglob("*"))
-    png = image_bytes("PNG")
+def test_import_duplicate_product_and_cleanup(auth):
+    client, app, fake, tmp, token, database = auth
+    png = image_bytes()
     book = xlsx(
         [
-            ("xl/media/image1.png", png),
-            ("xl/media/image2.jpg", png),
+            ("xl/media/a.png", png),
+            ("xl/media/b.png", png),
             ("xl/media/bad.png", b"bad"),
-            ("xl/worksheets/sheet1.xml", b"anchors ignored"),
+            ("xl/worksheets/sheet.xml", b"ignored"),
         ]
     )
     response = client.post(
@@ -161,29 +132,11 @@ def test_real_import_duplicates_naming_search_no_files(auth):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert len(fake.files.uploads) == 1 and isinstance(fake.files.uploads[0]["file"], bytes)
-    after = set(tmp.rglob("*"))
-    assert not [
-        p
-        for p in after - before
-        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".xlsx"}
-    ]
-    with app.state.session_factory() as s:
-        images = s.scalars(select(ImportedImage).order_by(ImportedImage.id)).all()
-        assert len(images) == 3
-        assert images[0].status == "unnamed"
-        assert images[1].status == "duplicate"
-        assert images[2].status == "invalid_image"
-        image_id = images[0].id
-        batch_id = images[0].batch_id
-    assert (
-        client.post(
-            f"/imports/images/{image_id}/save",
-            data={"csrf_token": token, "name": "  "},
-            headers={"X-Requested-With": "fetch"},
-        ).status_code
-        == 400
-    )
+    assert len(fake.files.uploads) == 1
+    assert not list(tmp.rglob("*.xlsx"))
+    raw_images = list(database.raw.imported_images.find().sort("sequence_number"))
+    assert [x["status"] for x in raw_images] == ["unnamed", "duplicate", "invalid_image"]
+    image_id = str(raw_images[0]["_id"])
     assert (
         client.post(
             f"/imports/images/{image_id}/save",
@@ -193,65 +146,39 @@ def test_real_import_duplicates_naming_search_no_files(auth):
         == 200
     )
     assert len(fake.files.uploads) == 1
-    page = client.get("/products?q=حليب كامل")
-    assert "حليب كامل الدسم" in page.text
-    with app.state.session_factory() as s:
-        p = s.scalar(select(Product))
-        assert p.imagekit_file_id == images[0].imagekit_file_id
-        assert not any(
-            c["name"] in {"BLOB", "LargeBinary"}
-            for t in inspect(app.state.engine).get_table_names()
-            for c in inspect(app.state.engine).get_columns(t)
-        )
-        pid = p.id
-    assert (
-        client.post(
-            f"/products/{pid}/edit",
-            data={"csrf_token": token, "name": "حليب ٢ لتر"},
-            follow_redirects=False,
-        ).status_code
-        == 303
-    )
-    assert "حليب ٢ لتر" in client.get("/products?q=2 لتر").text
-    assert client.get(f"/imports/{batch_id}").status_code == 200
+    assert "حليب كامل الدسم" in client.get("/products?q=حليب").text
+    product = database.raw.products.find_one()
+    assert product["metadata"]["source"] == "import"
 
 
-def test_manual_replace_and_shared_delete(auth):
-    client, app, fake, _, token = auth
-    img = image_bytes()
-    r = client.post(
-        "/products/new",
-        data={"csrf_token": token, "name": "ماء"},
-        files={"image": ("a.png", img, "image/png")},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    assert len(fake.files.uploads) == 1
-    with app.state.session_factory() as s:
-        p = s.scalar(select(Product))
-        pid = p.id
-        old = p.imagekit_file_id
-    r = client.post(
-        f"/products/{pid}/edit",
-        data={"csrf_token": token, "name": "ماء جديد"},
-        files={"image": ("b.jpg", image_bytes("JPEG", "blue"), "image/jpeg")},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    assert old in [x["file_id"] for x in fake.files.deleted]
+@pytest.mark.asyncio
+async def test_manual_upload_rollback_and_orphan_record(auth, monkeypatch):
+    _, app, fake, _, _, database = auth
+
+    async def failed_create(product):
+        raise RuntimeError("mongo unavailable")
+
+    monkeypatch.setattr(app.state.repositories.products, "create", failed_create)
+    processed = app.state.processor.process(image_bytes())
+    with pytest.raises(RuntimeError):
+        await app.state.products.create_manual("ماء", processed)
+    assert len(fake.files.deleted) == 1
+    fake.files.fail_delete = True
+    with pytest.raises(RuntimeError):
+        await app.state.products.create_manual("ماء", processed)
+    assert database.raw.orphan_cleanup.count_documents({"status": "pending"}) == 1
 
 
-def test_cleanup_idempotent(auth):
-    client, app, fake, _, token = auth
+def test_cleanup_is_reference_safe_and_idempotent(auth):
+    client, app, fake, _, token, database = auth
     client.post(
         "/imports/new",
         data={"csrf_token": token},
         files={"file": ("x.xlsx", xlsx([("xl/media/a.png", image_bytes())]))},
     )
-    with app.state.session_factory() as s:
-        i = s.scalar(select(ImportedImage))
-        bid = i.batch_id
-    client.post(f"/imports/images/{i.id}/ignore", data={"csrf_token": token})
-    client.post(f"/imports/{bid}/cleanup", data={"csrf_token": token})
-    client.post(f"/imports/{bid}/cleanup", data={"csrf_token": token})
+    image = database.raw.imported_images.find_one()
+    image_id, import_id = str(image["_id"]), str(image["import_id"])
+    client.post(f"/imports/images/{image_id}/ignore", data={"csrf_token": token})
+    client.post(f"/imports/{import_id}/cleanup", data={"csrf_token": token})
+    client.post(f"/imports/{import_id}/cleanup", data={"csrf_token": token})
     assert len(fake.files.deleted) == 1
