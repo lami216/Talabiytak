@@ -136,6 +136,41 @@ async def test_imagekit_upload_requires_complete_response(auth, monkeypatch):
         await app.state.storage.upload(b"image", "jpg")
 
 
+@pytest.mark.asyncio
+async def test_imagekit_uses_configured_delivery_endpoint(auth, monkeypatch):
+    _, app, fake, *_ = auth
+
+    class ForeignUrlResult:
+        file_id = "file-foreign"
+        file_path = "/imports/صورة منتج.jpg"
+        url = "https://unexpected-delivery.example/imports/image.jpg"
+        thumbnail_url = "https://another-host.example/temporary-thumbnail.jpg"
+
+    monkeypatch.setattr(fake.files, "upload", lambda **kwargs: ForeignUrlResult())
+    stored = await app.state.storage.upload(b"image", "jpg")
+
+    expected = (
+        "https://ik.imagekit.io/test/imports/"
+        "%D8%B5%D9%88%D8%B1%D8%A9%20%D9%85%D9%86%D8%AA%D8%AC.jpg"
+    )
+    assert stored.url == expected
+
+    # Rendering must also rebuild legacy database URLs from file_path, rather than using a stale
+    # URL or a thumbnail hosted outside the page's CSP allow-list.
+    asset = ImageAsset(
+        stored.file_id,
+        stored.file_path,
+        ForeignUrlResult.url,
+        ForeignUrlResult.thumbnail_url,
+        "a" * 64,
+        "image/jpeg",
+        1,
+        1,
+    )
+    rendered = app.state.templates.env.globals["imagekit_url"](asset)
+    assert rendered == expected
+
+
 def test_import_duplicate_product_and_cleanup(auth):
     client, app, fake, tmp, token, database = auth
     png = image_bytes()

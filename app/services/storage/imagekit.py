@@ -67,7 +67,11 @@ class ImageKitStorage:
                         or not parsed_url.netloc
                     ):
                         raise ImageKitError("استجابة ImageKit لا تحتوي على بيانات الصورة المطلوبة")
-                    return StoredAsset(file_id, file_path, url, thumbnail_url)
+                    # file_path is the durable ImageKit identifier. API response and thumbnail
+                    # URLs can point at a different delivery host, which is then blocked by CSP.
+                    # Persist a URL derived from our configured endpoint instead.
+                    delivery_url = self.settings.imagekit_delivery_url(file_path)
+                    return StoredAsset(file_id, file_path, delivery_url, thumbnail_url)
                 except Exception as exc:
                     last = exc
                     if attempt < 2:

@@ -69,6 +69,9 @@ def create_app(settings: Settings | None = None, *, database=None, imagekit_clie
     app.state.settings = settings
     app.state.security = Security(settings)
     app.state.templates = Jinja2Templates(directory=BASE / "templates")
+    app.state.templates.env.globals["imagekit_url"] = lambda asset: (
+        settings.imagekit_delivery_url(asset.file_path) if asset else None
+    )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_host_list)
     app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
     app.include_router(router)
