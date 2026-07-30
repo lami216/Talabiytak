@@ -10,7 +10,7 @@ from app.database import ensure_indexes, verify_database
 from app.models import ImageAsset, ImageStatus, ImportedImage, Product
 from app.repositories import ImportedImagesRepository, ImportsRepository, ProductsRepository
 from app.services.arabic import ArabicNormalizationService
-from app.services.errors import ImageKitError, ImageProcessingError, ValidationError
+from app.services.errors import ImageKitError, ValidationError
 from app.utils.objectid import serialize_id, to_object_id
 
 
@@ -110,15 +110,21 @@ def test_auth_csrf_health_and_readiness(auth):
     )
 
 
-def test_processing_and_normalization(auth):
+def test_processing_preserves_original_file_and_arabic_normalization(auth):
     _, app, *_ = auth
     normalizer = ArabicNormalizationService()
     assert normalizer.normalize("مُنتَج  رائع!!!") == "منتج رائع"
     for fmt in ("PNG", "JPEG", "WEBP", "GIF"):
-        processed = app.state.processor.process(image_bytes(fmt))
+        original = image_bytes(fmt)
+        processed = app.state.processor.process(original)
         assert processed.width == 20 and len(processed.sha256) == 64
-    with pytest.raises(ImageProcessingError):
-        app.state.processor.process(image_bytes("GIF", animated=True))
+        assert processed.data == original
+        assert processed.original_format == processed.normalized_format == fmt
+        assert processed.extension == {"PNG": "png", "JPEG": "jpg", "WEBP": "webp", "GIF": "gif"}[
+            fmt
+        ]
+    animated_gif = image_bytes("GIF", animated=True)
+    assert app.state.processor.process(animated_gif).data == animated_gif
 
 
 @pytest.mark.asyncio
@@ -134,6 +140,41 @@ async def test_imagekit_upload_requires_complete_response(auth, monkeypatch):
     monkeypatch.setattr(fake.files, "upload", lambda **kwargs: IncompleteResult())
     with pytest.raises(ImageKitError, match="فشل رفع الصورة"):
         await app.state.storage.upload(b"image", "jpg")
+
+
+@pytest.mark.asyncio
+async def test_imagekit_uses_configured_delivery_endpoint(auth, monkeypatch):
+    _, app, fake, *_ = auth
+
+    class ForeignUrlResult:
+        file_id = "file-foreign"
+        file_path = "/imports/صورة منتج.jpg"
+        url = "https://unexpected-delivery.example/imports/image.jpg"
+        thumbnail_url = "https://another-host.example/temporary-thumbnail.jpg"
+
+    monkeypatch.setattr(fake.files, "upload", lambda **kwargs: ForeignUrlResult())
+    stored = await app.state.storage.upload(b"image", "jpg")
+
+    expected = (
+        "https://ik.imagekit.io/test/imports/"
+        "%D8%B5%D9%88%D8%B1%D8%A9%20%D9%85%D9%86%D8%AA%D8%AC.jpg"
+    )
+    assert stored.url == expected
+
+    # Rendering must also rebuild legacy database URLs from file_path, rather than using a stale
+    # URL or a thumbnail hosted outside the page's CSP allow-list.
+    asset = ImageAsset(
+        stored.file_id,
+        stored.file_path,
+        ForeignUrlResult.url,
+        ForeignUrlResult.thumbnail_url,
+        "a" * 64,
+        "image/jpeg",
+        1,
+        1,
+    )
+    rendered = app.state.templates.env.globals["imagekit_url"](asset)
+    assert rendered == expected
 
 
 def test_import_duplicate_product_and_cleanup(auth):
@@ -155,6 +196,8 @@ def test_import_duplicate_product_and_cleanup(auth):
     )
     assert response.status_code == 303
     assert len(fake.files.uploads) == 1
+    assert fake.files.uploads[0]["file"] == png
+    assert fake.files.uploads[0]["file_name"].endswith(".png")
     assert not list(tmp.rglob("*.xlsx"))
     raw_images = list(database.raw.imported_images.find().sort("sequence_number"))
     assert [x["status"] for x in raw_images] == ["unnamed", "duplicate", "invalid_image"]

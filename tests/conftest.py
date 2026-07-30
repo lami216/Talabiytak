@@ -94,7 +94,7 @@ class AsyncDatabase:
 class Result:
     def __init__(self, number):
         self.file_id = f"file-{number}"
-        self.file_path = f"/test/{number}.jpg"
+        self.file_path = f"/{number}.jpg"
         self.url = f"https://ik.imagekit.io/test/{number}.jpg"
         # ImageKit may omit this field; templates must fall back to the canonical URL.
         self.thumbnail_url = None
