@@ -1,4 +1,5 @@
 import zipfile
+from hashlib import sha256
 from io import BytesIO
 
 import pytest
@@ -10,7 +11,7 @@ from app.database import ensure_indexes, verify_database
 from app.models import ImageAsset, ImageStatus, ImportedImage, Product
 from app.repositories import ImportedImagesRepository, ImportsRepository, ProductsRepository
 from app.services.arabic import ArabicNormalizationService
-from app.services.errors import ImageKitError, ValidationError
+from app.services.errors import ImageKitError, ImageProcessingError, ValidationError
 from app.utils.objectid import serialize_id, to_object_id
 
 
@@ -119,45 +120,61 @@ def test_processing_preserves_original_file_and_arabic_normalization(auth):
         processed = app.state.processor.process(original)
         assert processed.width == 20 and len(processed.sha256) == 64
         assert processed.data == original
+        assert len(processed.data) == len(original)
+        assert sha256(processed.data).hexdigest() == sha256(original).hexdigest()
+        assert processed.height == 15
+        assert (
+            processed.mime_type
+            == {
+                "PNG": "image/png",
+                "JPEG": "image/jpeg",
+                "WEBP": "image/webp",
+                "GIF": "image/gif",
+            }[fmt]
+        )
         assert processed.original_format == processed.normalized_format == fmt
-        assert processed.extension == {"PNG": "png", "JPEG": "jpg", "WEBP": "webp", "GIF": "gif"}[
-            fmt
-        ]
+        assert (
+            processed.extension == {"PNG": "png", "JPEG": "jpg", "WEBP": "webp", "GIF": "gif"}[fmt]
+        )
     animated_gif = image_bytes("GIF", animated=True)
-    assert app.state.processor.process(animated_gif).data == animated_gif
+    with pytest.raises(ImageProcessingError, match="المتحركة"):
+        app.state.processor.process(animated_gif)
 
 
 @pytest.mark.asyncio
 async def test_imagekit_upload_requires_complete_response(auth, monkeypatch):
     _, app, fake, *_ = auth
 
-    class IncompleteResult:
-        file_id = ""
-        file_path = "/test/incomplete.jpg"
-        url = ""
-        thumbnail_url = None
-
-    monkeypatch.setattr(fake.files, "upload", lambda **kwargs: IncompleteResult())
-    with pytest.raises(ImageKitError, match="فشل رفع الصورة"):
-        await app.state.storage.upload(b"image", "jpg")
+    fake.upload_transport.response_override = {
+        "fileId": "",
+        "filePath": "/test/incomplete.png",
+        "url": "",
+        "fileType": "image",
+    }
+    png = image_bytes()
+    with pytest.raises(ImageKitError, match="صالحة"):
+        await app.state.storage.upload(png, "png", "image/png", 20, 15)
 
 
 @pytest.mark.asyncio
 async def test_imagekit_uses_configured_delivery_endpoint(auth, monkeypatch):
     _, app, fake, *_ = auth
 
-    class ForeignUrlResult:
-        file_id = "file-foreign"
-        file_path = "/imports/صورة منتج.jpg"
-        url = "https://unexpected-delivery.example/imports/image.jpg"
-        thumbnail_url = "https://another-host.example/temporary-thumbnail.jpg"
-
-    monkeypatch.setattr(fake.files, "upload", lambda **kwargs: ForeignUrlResult())
-    stored = await app.state.storage.upload(b"image", "jpg")
+    fake.upload_transport.response_override = {
+        "fileId": "file-foreign",
+        "filePath": "/imports/صورة منتج.png",
+        "url": "https://unexpected-delivery.example/imports/image.png",
+        "thumbnailUrl": "https://another-host.example/temporary-thumbnail.png",
+        "fileType": "image",
+        "size": len(image_bytes()),
+        "width": 20,
+        "height": 15,
+    }
+    stored = await app.state.storage.upload(image_bytes(), "png", "image/png", 20, 15)
 
     expected = (
         "https://ik.imagekit.io/test/imports/"
-        "%D8%B5%D9%88%D8%B1%D8%A9%20%D9%85%D9%86%D8%AA%D8%AC.jpg"
+        "%D8%B5%D9%88%D8%B1%D8%A9%20%D9%85%D9%86%D8%AA%D8%AC.png"
     )
     assert stored.url == expected
 
@@ -166,8 +183,8 @@ async def test_imagekit_uses_configured_delivery_endpoint(auth, monkeypatch):
     asset = ImageAsset(
         stored.file_id,
         stored.file_path,
-        ForeignUrlResult.url,
-        ForeignUrlResult.thumbnail_url,
+        fake.upload_transport.response_override["url"],
+        fake.upload_transport.response_override["thumbnailUrl"],
         "a" * 64,
         "image/jpeg",
         1,
@@ -175,6 +192,43 @@ async def test_imagekit_uses_configured_delivery_endpoint(auth, monkeypatch):
     )
     rendered = app.state.templates.env.globals["imagekit_url"](asset)
     assert rendered == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fmt", "extension", "mime_type"),
+    [("PNG", "png", "image/png"), ("WEBP", "webp", "image/webp")],
+)
+async def test_imagekit_multipart_contains_exact_original_bytes(auth, fmt, extension, mime_type):
+    _, app, fake, *_ = auth
+    original = image_bytes(fmt)
+    stored = await app.state.storage.upload(original, extension, mime_type, 20, 15)
+    uploaded = fake.files.uploads[-1]
+    assert uploaded["file"] == original
+    assert sha256(uploaded["file"]).hexdigest() == sha256(original).hexdigest()
+    assert uploaded["file_name"].endswith(f".{extension}")
+    assert uploaded["content_type"] == mime_type
+    assert uploaded["fields"]["fileName"] == uploaded["file_name"]
+    assert uploaded["fields"]["useUniqueFileName"] == "false"
+    assert stored.size == len(original)
+
+
+@pytest.mark.asyncio
+async def test_imagekit_deletes_upload_when_remote_integrity_differs(auth):
+    _, app, fake, *_ = auth
+    original = image_bytes()
+    fake.upload_transport.response_override = {
+        "fileId": "mismatched-file",
+        "filePath": "/mismatched.png",
+        "url": "https://ik.imagekit.io/test/mismatched.png",
+        "fileType": "image",
+        "size": len(original) + 1,
+        "width": 20,
+        "height": 15,
+    }
+    with pytest.raises(ImageKitError, match="لا تطابق"):
+        await app.state.storage.upload(original, "png", "image/png", 20, 15)
+    assert fake.files.deleted == [{"file_id": "mismatched-file"}]
 
 
 def test_import_duplicate_product_and_cleanup(auth):
@@ -188,6 +242,8 @@ def test_import_duplicate_product_and_cleanup(auth):
             ("xl/worksheets/sheet.xml", b"ignored"),
         ]
     )
+    with zipfile.ZipFile(BytesIO(book)) as archive:
+        workbook_media = archive.read("xl/media/a.png")
     response = client.post(
         "/imports/new",
         data={"csrf_token": token},
@@ -196,13 +252,16 @@ def test_import_duplicate_product_and_cleanup(auth):
     )
     assert response.status_code == 303
     assert len(fake.files.uploads) == 1
-    assert fake.files.uploads[0]["file"] == png
+    assert fake.files.uploads[0]["file"] == workbook_media == png
+    assert len(fake.files.uploads[0]["file"]) == len(workbook_media)
+    assert sha256(fake.files.uploads[0]["file"]).hexdigest() == sha256(workbook_media).hexdigest()
     assert fake.files.uploads[0]["file_name"].endswith(".png")
+    assert fake.files.uploads[0]["content_type"] == "image/png"
     assert not list(tmp.rglob("*.xlsx"))
     raw_images = list(database.raw.imported_images.find().sort("sequence_number"))
     assert [x["status"] for x in raw_images] == ["unnamed", "duplicate", "invalid_image"]
     import_id = str(raw_images[0]["import_id"])
-    image_url = "https://ik.imagekit.io/test/1.jpg"
+    image_url = "https://ik.imagekit.io/test/1.png"
     batch_html = client.get(f"/imports/{import_id}")
     assert batch_html.status_code == 200
     assert f'<img src="{image_url}"' in batch_html.text
@@ -223,6 +282,8 @@ def test_import_duplicate_product_and_cleanup(auth):
     product = database.raw.products.find_one()
     assert product["metadata"]["source"] == "import"
     assert product["primary_image"] == raw_images[0]["image_asset"]
+    assert product["primary_image"]["hash"] == sha256(png).hexdigest()
+    assert product["primary_image"]["size"] == len(png)
     assert f'<img src="{image_url}"' in client.get(f"/products/{product['_id']}/edit").text
 
 

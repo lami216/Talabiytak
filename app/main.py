@@ -47,7 +47,13 @@ def configure_services(app, database, storage):
     app.state.storage = storage
 
 
-def create_app(settings: Settings | None = None, *, database=None, imagekit_client=None):
+def create_app(
+    settings: Settings | None = None,
+    *,
+    database=None,
+    imagekit_client=None,
+    imagekit_upload_transport=None,
+):
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -58,7 +64,9 @@ def create_app(settings: Settings | None = None, *, database=None, imagekit_clie
             client, db = create_mongo(settings)
             await db.command("ping")
         app.state.mongo_client, app.state.database = client, db
-        configure_services(app, db, ImageKitStorage(settings, imagekit_client))
+        configure_services(
+            app, db, ImageKitStorage(settings, imagekit_client, imagekit_upload_transport)
+        )
         try:
             yield
         finally:

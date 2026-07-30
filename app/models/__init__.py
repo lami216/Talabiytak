@@ -41,6 +41,7 @@ class ImageAsset:
     mime_type: str
     width: int
     height: int
+    size: int | None = None
 
 
 @dataclass

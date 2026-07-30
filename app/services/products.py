@@ -68,7 +68,13 @@ class ProductService:
             )
             return await self.products.create(product)
         stored = await self.storage.upload(
-            processed.data, processed.extension, purpose="product", correlation_id=processed.sha256
+            processed.data,
+            processed.extension,
+            processed.mime_type,
+            processed.width,
+            processed.height,
+            purpose="product",
+            correlation_id=processed.sha256,
         )
         asset = ImageAsset(
             stored.file_id,
@@ -79,6 +85,7 @@ class ProductService:
             processed.mime_type,
             processed.width,
             processed.height,
+            stored.size if stored.size is not None else len(processed.data),
         )
         product = Product(
             new_id(), name, self.normalizer.normalize(name), asset, {"source": "manual"}
@@ -111,7 +118,13 @@ class ProductService:
     async def replace(self, product_id, processed):
         product = await self._required(product_id)
         stored = await self.storage.upload(
-            processed.data, processed.extension, purpose="product", correlation_id=processed.sha256
+            processed.data,
+            processed.extension,
+            processed.mime_type,
+            processed.width,
+            processed.height,
+            purpose="product",
+            correlation_id=processed.sha256,
         )
         old = product.primary_image
         product.primary_image = ImageAsset(
@@ -123,6 +136,7 @@ class ProductService:
             processed.mime_type,
             processed.width,
             processed.height,
+            stored.size if stored.size is not None else len(processed.data),
         )
         try:
             await self.products.update(product)

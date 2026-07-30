@@ -15,6 +15,7 @@ def asset_to_doc(asset: ImageAsset | None):
             "mime_type": asset.mime_type,
             "width": asset.width,
             "height": asset.height,
+            "size": asset.size,
         }
     )
 
