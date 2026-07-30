@@ -2,6 +2,7 @@ import logging
 import os
 import tempfile
 import zipfile
+from hashlib import sha256
 from pathlib import PurePosixPath
 
 from app.models import ImageAsset, ImageStatus, ImportedImage, ImportStatus
@@ -99,7 +100,14 @@ class ImportService:
                 try:
                     if info.file_size > self.settings.max_single_image_mb * 1024 * 1024:
                         raise ImageProcessingError("حجم الصورة يتجاوز الحد المسموح")
-                    processed = self.processor.process(archive.read(info))
+                    original_data = archive.read(info)
+                    processed = self.processor.process(original_data)
+                    if (
+                        not processed.data
+                        or len(processed.data) != len(original_data)
+                        or processed.sha256 != sha256(original_data).hexdigest()
+                    ):
+                        raise ImageProcessingError("تغيرت بيانات الصورة الأصلية أثناء المعالجة")
                     image.hash, image.mime_type = processed.sha256, processed.mime_type
                     image.dimensions = {"width": processed.width, "height": processed.height}
                     counters["valid_images"] += 1
@@ -120,6 +128,9 @@ class ImportService:
                         stored = await self.storage.upload(
                             processed.data,
                             processed.extension,
+                            processed.mime_type,
+                            processed.width,
+                            processed.height,
                             purpose="import",
                             correlation_id=f"{import_id}-{sequence}-{processed.sha256[:12]}",
                         )
@@ -133,6 +144,7 @@ class ImportService:
                             processed.mime_type,
                             processed.width,
                             processed.height,
+                            stored.size if stored.size is not None else len(processed.data),
                         )
                         image.status = ImageStatus.unnamed.value
                         counters["uploaded_images"] += 1

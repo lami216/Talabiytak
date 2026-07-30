@@ -7,3 +7,10 @@
 5. Start the ASGI application with `uvicorn app.main:app` or the supplied PM2 configuration.
 
 MongoDB owns durable catalog metadata; ImageKit owns image bytes. Back up MongoDB through Atlas. No SQLite or Alembic deployment step exists.
+
+## Re-importing images uploaded before the binary-upload fix
+
+Deploy the fixed application before accepting another workbook import. Images that already arrived
+corrupted in ImageKit cannot be repaired by this code change: delete those ImageKit files, remove
+their related test/import records where appropriate, and upload the original XLSX again. The exact
+original bytes cannot be recovered from a corrupted ImageKit object without the original workbook.

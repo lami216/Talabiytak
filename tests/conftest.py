@@ -13,9 +13,15 @@ os.environ.update(
     TRUSTED_HOSTS="testserver,localhost",
 )
 
+from email.parser import BytesParser
+from email.policy import default
+from io import BytesIO
+
+import httpx
 import mongomock
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.config import Settings
 from app.database import ensure_indexes
@@ -105,10 +111,6 @@ class Files:
         self.uploads, self.deleted, self.updates = [], [], []
         self.fail_delete = False
 
-    def upload(self, **kwargs):
-        self.uploads.append(kwargs)
-        return Result(len(self.uploads))
-
     def delete(self, **kwargs):
         if self.fail_delete:
             raise RuntimeError("delete failed")
@@ -124,6 +126,53 @@ class Files:
 class FakeImageKit:
     def __init__(self):
         self.files = Files()
+
+
+class UploadTransport:
+    def __init__(self, fake):
+        self.fake = fake
+        self.response_override = None
+
+    def __call__(self, request):
+        message = BytesParser(policy=default).parsebytes(
+            b"Content-Type: "
+            + request.headers["content-type"].encode()
+            + b"\r\n\r\n"
+            + request.content
+        )
+        fields = {}
+        uploaded = None
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if name == "file":
+                uploaded = {
+                    "file": part.get_payload(decode=True),
+                    "file_name": part.get_filename(),
+                    "content_type": part.get_content_type(),
+                }
+            else:
+                fields[name] = part.get_content().strip()
+        assert uploaded is not None
+        uploaded["fields"] = fields
+        self.fake.files.uploads.append(uploaded)
+        if self.response_override is not None:
+            payload = self.response_override
+        else:
+            with Image.open(BytesIO(uploaded["file"])) as image:
+                width, height = image.size
+            number = len(self.fake.files.uploads)
+            extension = uploaded["file_name"].rsplit(".", 1)[-1]
+            payload = {
+                "fileId": f"file-{number}",
+                "filePath": f"/{number}.{extension}",
+                "url": f"https://ik.imagekit.io/test/{number}.{extension}",
+                "thumbnailUrl": None,
+                "fileType": "image",
+                "size": len(uploaded["file"]),
+                "width": width,
+                "height": height,
+            }
+        return httpx.Response(200, json=payload)
 
 
 @pytest.fixture
@@ -147,7 +196,14 @@ def setup(database, tmp_path):
         trusted_hosts="testserver,localhost",
     )
     fake = FakeImageKit()
-    app = create_app(settings, database=database, imagekit_client=fake)
+    transport_handler = UploadTransport(fake)
+    fake.upload_transport = transport_handler
+    app = create_app(
+        settings,
+        database=database,
+        imagekit_client=fake,
+        imagekit_upload_transport=httpx.MockTransport(transport_handler),
+    )
     with TestClient(app) as client:
         yield client, app, fake, tmp_path, database
 

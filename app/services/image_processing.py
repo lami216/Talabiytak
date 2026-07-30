@@ -18,6 +18,7 @@ class ProcessedImage:
     sha256: str
     original_format: str
     normalized_format: str
+    frame_count: int
 
 
 class ImageProcessingService:
@@ -30,7 +31,6 @@ class ImageProcessingService:
             raise ImageProcessingError("حجم الصورة غير صالح أو يتجاوز الحد المسموح")
         try:
             with BytesIO(data) as source, Image.open(source) as opened:
-                opened.load()
                 original = (opened.format or "").upper()
                 formats = {
                     "PNG": ("png", "image/png"),
@@ -47,7 +47,11 @@ class ImageProcessingService:
                 ):
                     raise ImageProcessingError("أبعاد الصورة تتجاوز الحد المسموح")
                 width, height = opened.width, opened.height
+                frame_count = getattr(opened, "n_frames", 1)
                 extension, mime_type = formats[original]
+                if original == "GIF" and frame_count > 1:
+                    raise ImageProcessingError("صور GIF المتحركة غير مدعومة")
+                opened.verify()
 
                 # Pillow is used only to validate the image. Re-encoding here used to change PNG,
                 # WEBP and GIF files (often into JPEG), alter their byte size, discard metadata,
@@ -62,6 +66,7 @@ class ImageProcessingService:
                     sha256(data).hexdigest(),
                     original,
                     original,
+                    frame_count,
                 )
         except ImageProcessingError:
             raise
