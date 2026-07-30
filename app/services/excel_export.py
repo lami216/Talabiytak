@@ -6,7 +6,10 @@ from urllib.parse import urlparse
 import httpx
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils.units import pixels_to_EMU
 from PIL import Image, UnidentifiedImageError
 
 from app.services.errors import AppError, ValidationError
@@ -66,20 +69,21 @@ class ExcelExportService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "الطلبية"
-        sheet.sheet_view.rightToLeft = True
+        sheet.sheet_view.rightToLeft = False
         sheet.merge_cells("A1:C1")
         sheet["A1"] = order.title
-        sheet["A1"].font = Font(bold=True, size=18)
-        sheet["A1"].alignment = Alignment(horizontal="center")
-        sheet.row_dimensions[1].height = 30
+        sheet["A1"].font = Font(bold=True, size=16)
+        sheet["A1"].alignment = Alignment(horizontal="center", vertical="center", readingOrder=2)
+        sheet.row_dimensions[1].height = 26
         headers = ("الصورة", "اسم المنتج", "الكمية")
         border = Border(*([Side(style="thin", color="888888")] * 4))
         for col, value in enumerate(headers, 1):
             cell = sheet.cell(3, col, value)
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="DDEFE9")
-            cell.alignment = Alignment(horizontal="center")
+            cell.alignment = Alignment(horizontal="center", vertical="center", readingOrder=2)
             cell.border = border
+        sheet.row_dimensions[3].height = 22
         keepalive = []
         try:
             for row, (item, raw) in enumerate(
@@ -89,7 +93,7 @@ class ExcelExportService:
                     with Image.open(BytesIO(raw)) as source:
                         source.verify()
                     with Image.open(BytesIO(raw)) as source:
-                        source.thumbnail((160, 160))
+                        source.thumbnail((90, 90), Image.Resampling.LANCZOS)
                         converted = BytesIO()
                         source.convert("RGBA").save(converted, "PNG")
                     converted.seek(0)
@@ -97,18 +101,28 @@ class ExcelExportService:
                     picture = ExcelImage(converted)
                 except (UnidentifiedImageError, OSError) as exc:
                     raise AppError("الصورة غير صالحة.") from exc
-                sheet.add_image(picture, f"A{row}")
+                margin = pixels_to_EMU(4)
+                picture.anchor = OneCellAnchor(
+                    _from=AnchorMarker(col=0, colOff=margin, row=row - 1, rowOff=margin),
+                    ext=XDRPositiveSize2D(
+                        cx=pixels_to_EMU(picture.width), cy=pixels_to_EMU(picture.height)
+                    ),
+                )
+                sheet.add_image(picture)
                 sheet.cell(row, 2, item.product_name)
                 sheet.cell(row, 3, item.quantity)
-                sheet.row_dimensions[row].height = 125
+                sheet.row_dimensions[row].height = 72
                 for col in range(1, 4):
                     sheet.cell(row, col).alignment = Alignment(
-                        horizontal="center", vertical="center"
+                        horizontal="center",
+                        vertical="center",
+                        wrap_text=True,
+                        readingOrder=2 if col == 2 else 0,
                     )
                     sheet.cell(row, col).border = border
-            sheet.column_dimensions["A"].width = 24
-            sheet.column_dimensions["B"].width = 45
-            sheet.column_dimensions["C"].width = 16
+            sheet.column_dimensions["A"].width = 15
+            sheet.column_dimensions["B"].width = 32
+            sheet.column_dimensions["C"].width = 12
             sheet.freeze_panes = "A4"
             output = BytesIO()
             workbook.save(output)
