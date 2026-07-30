@@ -21,7 +21,11 @@ class ImageKitService:
         if client is None:
             from imagekitio import ImageKit
 
-            client = ImageKit(private_key=settings.imagekit_private_key)
+            client = ImageKit(
+                public_key=settings.imagekit_public_key,
+                private_key=settings.imagekit_private_key,
+                url_endpoint=settings.imagekit_url_endpoint,
+            )
         self.client = client
 
     def upload(
