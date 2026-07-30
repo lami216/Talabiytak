@@ -96,7 +96,8 @@ class Result:
         self.file_id = f"file-{number}"
         self.file_path = f"/test/{number}.jpg"
         self.url = f"https://ik.imagekit.io/test/{number}.jpg"
-        self.thumbnail_url = self.url
+        # ImageKit may omit this field; templates must fall back to the canonical URL.
+        self.thumbnail_url = None
 
 
 class Files:

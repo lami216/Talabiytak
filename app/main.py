@@ -83,7 +83,7 @@ def create_app(settings: Settings | None = None, *, database=None, imagekit_clie
                 "Referrer-Policy": "same-origin",
                 "Content-Security-Policy": (
                     f"default-src 'self'; img-src 'self' data: "
-                    f"{settings.imagekit_url_endpoint}; style-src 'self'; script-src 'self'; "
+                    f"{settings.imagekit_origin}; style-src 'self'; script-src 'self'; "
                     "frame-ancestors 'none'; form-action 'self'"
                 ),
                 "X-Request-ID": request.state.request_id,
