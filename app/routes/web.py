@@ -74,8 +74,10 @@ async def logout(request: Request, csrf_token: str = Form(...)):
 async def dashboard(request: Request):
     if isinstance(result := guard(request), RedirectResponse):
         return result
-    stats, batches, products = await request.app.state.catalog.dashboard()
-    return render(request, "dashboard.html", stats=stats, batches=batches, products=products)
+    stats, batches, products, orders = await request.app.state.catalog.dashboard()
+    return render(
+        request, "dashboard.html", stats=stats, batches=batches, products=products, orders=orders
+    )
 
 
 @router.get("/imports/new", response_class=HTMLResponse)

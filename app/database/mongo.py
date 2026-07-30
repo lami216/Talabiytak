@@ -4,6 +4,7 @@ REQUIRED_INDEXES = {
     "products": {"normalized_name_1"},
     "imported_images": {"hash_1", "import_id_1_sequence_number_1", "status_1"},
     "imports": {"status_1", "created_at_-1"},
+    "orders": {"orders_expires_at_ttl", "orders_created_at_desc"},
 }
 
 
@@ -27,6 +28,10 @@ async def ensure_indexes(db):
     await db.imports.create_index([("status", ASCENDING)])
     await db.imports.create_index([("created_at", DESCENDING)])
     await db.orphan_cleanup.create_index([("file_id", ASCENDING)], unique=True)
+    await db.orders.create_index(
+        [("expires_at", ASCENDING)], expireAfterSeconds=0, name="orders_expires_at_ttl"
+    )
+    await db.orders.create_index([("created_at", DESCENDING)], name="orders_created_at_desc")
 
 
 async def verify_database(db):
