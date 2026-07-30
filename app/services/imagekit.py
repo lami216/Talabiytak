@@ -31,6 +31,8 @@ class ImageKitService:
     def upload(
         self, data: bytes | BytesIO, extension: str, batch_uuid: str | None = None, tags=None
     ) -> Asset:
+        from imagekitio.models.UploadFileRequestOptions import UploadFileRequestOptions
+
         payload = data.getvalue() if isinstance(data, BytesIO) else data
         if not isinstance(payload, bytes):
             raise ImageKitError("تعذر تجهيز الصورة للرفع")
@@ -40,15 +42,15 @@ class ImageKitService:
             if batch_uuid
             else f"{self.settings.imagekit_folder}/products"
         )
-        options = {
-            "folder": folder,
-            "tags": tags or ["product-image-manager", "imported-image", "unnamed"],
-            "use_unique_file_name": True,
-        }
+        options = UploadFileRequestOptions(
+            folder=folder,
+            tags=tags or ["product-image-manager", "imported-image", "unnamed"],
+            use_unique_file_name=True,
+        )
         last = None
         for attempt in range(3):
             try:
-                result = self.client.files.upload(file=payload, file_name=filename, options=options)
+                result = self.client.file.upload(file=payload, file_name=filename, options=options)
                 raw = getattr(result, "response_metadata", None)
                 raw = getattr(raw, "raw", None) or result
 
@@ -73,16 +75,21 @@ class ImageKitService:
 
     def delete(self, file_id: str):
         try:
-            self.client.files.delete(file_id=file_id)
+            self.client.file.delete(file_id=file_id)
         except Exception as exc:
             raise RemoteDeleteError("تعذر حذف الصورة من ImageKit، حاول مرة أخرى") from exc
 
     def update_tags(self, file_id: str, tags: list[str]):
+        from imagekitio.models.UpdateFileRequestOptions import UpdateFileRequestOptions
+
         try:
-            self.client.files.update(file_id=file_id, tags=tags)
+            self.client.file.update_file_details(
+                file_id=file_id,
+                options=UpdateFileRequestOptions(tags=tags),
+            )
         except Exception:
             return False
         return True
 
     def details(self, file_id: str):
-        return self.client.files.get(file_id=file_id)
+        return self.client.file.details(file_id=file_id)
