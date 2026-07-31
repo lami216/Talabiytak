@@ -1,5 +1,6 @@
 from datetime import timedelta
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import httpx
@@ -119,6 +120,63 @@ def test_order_routes_excel_and_protection(auth):
     assert client.get("/orders/product-search?q=x").status_code == 200
     client.cookies.clear()
     assert client.get(download_url, follow_redirects=False).status_code == 303
+
+
+def test_order_form_includes_quantity_notification_and_script(auth):
+    client, *_ = auth
+
+    response = client.get("/orders/new")
+
+    assert response.status_code == 200
+    assert "data-order-notification" in response.text
+    assert 'role="alert"' in response.text
+    assert 'aria-live="assertive"' in response.text
+    assert "/static/orders.js" in response.text
+
+
+def test_search_quantity_client_side_contract():
+    script = Path("app/static/orders.js").read_text()
+
+    assert 'card.className = "card product-search-card"' in script
+    assert 'quantityInput.type = "number"' in script
+    assert 'quantityInput.min = "1"' in script
+    assert 'quantityInput.max = "1000000"' in script
+    assert 'quantityInput.step = "1"' in script
+    assert 'quantityInput.dataset.addQuantity = ""' in script
+    assert "quantityInput.name" not in script
+    assert "quantity.value = String(quantityValue)" in script
+    assert 'quantity.value = "1"' not in script
+    assert 'quantityInput.value = ""' in script
+    assert 'event.key === "Enter"' in script
+    assert "event.preventDefault()" in script
+    assert 'classList.add("is-invalid")' in script
+    assert 'setAttribute("aria-invalid", "true")' in script
+    assert 'removeAttribute("aria-invalid")' in script
+    for message in (
+        "رجاءً ضع الكمية المطلوبة.",
+        "أدخل كمية صحيحة أكبر من صفر.",
+        "هذا المنتج مضاف بالفعل.",
+        "تمت إضافة المنتج.",
+    ):
+        assert message in script
+
+
+@pytest.mark.parametrize("quantity", ["", "0", "-1", "1.5", "1000001"])
+def test_order_route_rejects_invalid_quantities(auth, quantity):
+    client, app, _, _, token, _ = auth
+    item = client.portal.call(product, app.state.repositories.products, "اختبار الكمية")
+
+    response = client.post(
+        "/orders/new",
+        data={
+            "csrf_token": token,
+            "title": "طلبية غير صالحة",
+            "product_id": item.id,
+            "quantity": quantity,
+        },
+    )
+
+    assert response.status_code == 400
 
 
 def test_excel_images_crop_to_fill_and_anchor_to_product_rows():
