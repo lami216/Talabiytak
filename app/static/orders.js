@@ -136,16 +136,19 @@
         id.name = "product_id";
         id.value = product.id;
         const title = document.createElement("strong");
+        title.className = "selected-product-name";
         title.textContent = product.name;
         const quantity = document.createElement("input");
+        quantity.className = "selected-quantity-input";
         quantity.type = "number";
         quantity.name = "quantity";
         quantity.min = "1";
         quantity.max = "1000000";
         quantity.required = true;
         quantity.value = String(quantityValue);
+        quantity.setAttribute("aria-label", `كمية المنتج ${product.name}`);
         const controls = document.createElement("div");
-        controls.className = "actions";
+        controls.className = "actions selected-product-actions";
         [["↑", "moveUp"], ["↓", "moveDown"], ["إزالة", "remove"]].forEach(
           ([text, key]) => {
             const button = document.createElement("button");
