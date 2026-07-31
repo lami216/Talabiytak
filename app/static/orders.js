@@ -27,10 +27,12 @@
       refresh();
     });
     card.querySelector("[data-move-up]").addEventListener("click", () => {
-      if (card.previousElementSibling) selected.insertBefore(card, card.previousElementSibling);
+      const next = card.nextElementSibling;
+      if (next) selected.insertBefore(next, card);
     });
     card.querySelector("[data-move-down]").addEventListener("click", () => {
-      if (card.nextElementSibling) selected.insertBefore(card.nextElementSibling, card);
+      const previous = card.previousElementSibling;
+      if (previous) selected.insertBefore(card, previous);
     });
   };
 
@@ -58,6 +60,7 @@
       const card = document.createElement("article");
       card.className = "card product-search-card";
       const image = document.createElement("img");
+      image.className = "product-search-image";
       image.src = product.image_url;
       image.alt = "";
       const name = document.createElement("strong");
@@ -101,6 +104,7 @@
       };
 
       const add = document.createElement("button");
+      add.className = "product-add-button";
       add.type = "button";
       add.dataset.addProduct = "";
       add.textContent = "إضافة";

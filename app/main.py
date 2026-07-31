@@ -1,6 +1,7 @@
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -32,6 +33,22 @@ from app.services.storage import ImageKitStorage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 BASE = Path(__file__).parent
+VERSIONED_ASSETS = ("style.css", "orders.js", "app.js")
+
+
+def _asset_version(path: Path) -> str:
+    """Return a stable version that changes only when the asset contents change."""
+    return sha256(path.read_bytes()).hexdigest()[:12]
+
+
+ASSET_VERSIONS = {
+    filename: _asset_version(BASE / "static" / filename) for filename in VERSIONED_ASSETS
+}
+
+
+def asset_version(filename: str) -> str:
+    """Look up an allow-listed, startup-cached static asset version for templates."""
+    return ASSET_VERSIONS[filename]
 
 
 def configure_services(app, database, storage):
@@ -94,6 +111,7 @@ def create_app(
     app.state.settings = settings
     app.state.security = Security(settings)
     app.state.templates = Jinja2Templates(directory=BASE / "templates")
+    app.state.templates.env.globals["asset_version"] = asset_version
     app.state.templates.env.globals["imagekit_url"] = lambda asset: (
         settings.imagekit_delivery_url(asset.file_path) if asset else None
     )
