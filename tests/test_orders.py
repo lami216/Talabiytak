@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 from PIL import Image
 
 from app.database.mongo import REQUIRED_INDEXES
+from app.main import _asset_version
 from app.models import ImageAsset, Order, OrderItem, Product, now
 from app.services.excel_export import ExcelExportService
 from app.utils.objectid import new_id
@@ -131,13 +132,31 @@ def test_order_form_includes_quantity_notification_and_script(auth):
     assert "data-order-notification" in response.text
     assert 'role="alert"' in response.text
     assert 'aria-live="assertive"' in response.text
-    assert "/static/orders.js" in response.text
+    assert "/static/orders.js?v=" in response.text
+    assert "/static/style.css?v=" in response.text
+    assert "/static/app.js?v=" in response.text
+
+
+def test_asset_version_is_content_based(tmp_path):
+    asset = tmp_path / "asset.js"
+    asset.write_text("first")
+    first = _asset_version(asset)
+    asset.write_text("second")
+
+    assert len(first) == 12
+    assert _asset_version(asset) != first
 
 
 def test_search_quantity_client_side_contract():
     script = Path("app/static/orders.js").read_text()
+    styles = Path("app/static/style.css").read_text()
 
     assert 'card.className = "card product-search-card"' in script
+    assert 'image.className = "product-search-image"' in script
+    assert 'name.className = "product-search-name"' in script
+    assert 'addControls.className = "product-add-controls"' in script
+    assert 'add.className = "product-add-button"' in script
+    assert "card.append(image, name, addControls, error)" in script
     assert 'quantityInput.type = "number"' in script
     assert 'quantityInput.min = "1"' in script
     assert 'quantityInput.max = "1000000"' in script
@@ -147,6 +166,7 @@ def test_search_quantity_client_side_contract():
     assert "quantity.value = String(quantityValue)" in script
     assert 'quantity.value = "1"' not in script
     assert 'quantityInput.value = ""' in script
+    assert "selected.append(item)" in script
     assert 'event.key === "Enter"' in script
     assert "event.preventDefault()" in script
     assert 'classList.add("is-invalid")' in script
@@ -159,6 +179,60 @@ def test_search_quantity_client_side_contract():
         "تمت إضافة المنتج.",
     ):
         assert message in script
+
+    assert 'grid-template-areas:"image" "name" "controls" "error"' in styles
+    assert ".product-search-name{grid-area:name;display:block" in styles
+    assert ".product-add-controls{grid-area:controls;display:grid" in styles
+    assert ".field-error{grid-area:error" in styles
+    assert ".selected-products-list{display:flex;flex-direction:column-reverse" in styles
+
+
+def test_reversed_visual_order_move_controls_contract():
+    script = Path("app/static/orders.js").read_text()
+
+    assert "const next = card.nextElementSibling" in script
+    assert "if (next) selected.insertBefore(next, card)" in script
+    assert "const previous = card.previousElementSibling" in script
+    assert "if (previous) selected.insertBefore(card, previous)" in script
+
+
+@pytest.mark.asyncio
+async def test_order_dom_sequence_stays_excel_sequence_after_edit(setup):
+    _, app, _, _, database = setup
+    products = [await product(app.state.repositories.products, name) for name in "ABCD"]
+    order = await app.state.orders.create(
+        "ترتيب المنتجات", [item.id for item in products[:3]], [1, 2, 3]
+    )
+
+    assert [item.product_name for item in order.items] == ["A", "B", "C"]
+    assert [item.position for item in order.items] == [1, 2, 3]
+    document = database.raw.orders.find_one({"title": "ترتيب المنتجات"})
+    assert [item["position"] for item in document["items"]] == [1, 2, 3]
+
+    unchanged = await app.state.orders.update(
+        order.id, order.title, [item.id for item in products[:3]], [1, 2, 3]
+    )
+    assert [item.product_name for item in unchanged.items] == ["A", "B", "C"]
+
+    extended = await app.state.orders.update(
+        order.id, order.title, [item.id for item in products], [1, 2, 3, 4]
+    )
+    assert [(item.product_name, item.position) for item in extended.items] == [
+        ("A", 1),
+        ("B", 2),
+        ("C", 3),
+        ("D", 4),
+    ]
+
+    picture = BytesIO()
+    with Image.new("RGB", (10, 10), "green") as source:
+        source.save(picture, "PNG")
+    workbook = load_workbook(
+        BytesIO(ExcelExportService._workbook(extended, [picture.getvalue()] * 4))
+    )
+    sheet = workbook["الطلبية"]
+    assert [sheet.cell(row, 2).value for row in range(4, 8)] == ["A", "B", "C", "D"]
+    workbook.close()
 
 
 @pytest.mark.parametrize("quantity", ["", "0", "-1", "1.5", "1000001"])
