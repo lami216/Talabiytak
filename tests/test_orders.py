@@ -182,9 +182,36 @@ def test_search_quantity_client_side_contract():
 
     assert 'grid-template-areas:"image" "name" "controls" "error"' in styles
     assert ".product-search-name{grid-area:name;display:block" in styles
-    assert ".product-add-controls{grid-area:controls;display:grid" in styles
+    assert ".product-add-controls{grid-area:controls;display:flex;direction:rtl" in styles
+    assert 'quantityInput.className = "product-quantity-input"' in script
+    assert 'title.className = "selected-product-name"' in script
+    assert 'quantity.className = "selected-quantity-input"' in script
+    assert 'controls.className = "actions selected-product-actions"' in script
+    assert "flex:0 0 82px;width:82px" in styles
+    assert "product-quantity-input{flex:1 1 auto" in styles
+    assert "selected-quantity-input{width:108px;min-width:96px" in styles
+    assert "text-align:center;direction:ltr" in styles
+    assert (
+        ".product-quantity-input.is-invalid{border:2px solid #d92d20;"
+        "background:#fff5f5;color:#17202a" in styles
+    )
     assert ".field-error{grid-area:error" in styles
     assert ".selected-products-list{display:flex;flex-direction:column-reverse" in styles
+
+
+def test_existing_and_new_selected_quantities_share_markup_contract():
+    template = Path("app/templates/order_form.html").read_text()
+    script = Path("app/static/orders.js").read_text()
+
+    assert 'class="selected-product-name"' in template
+    assert 'class="selected-quantity-input" type="number" name="quantity"' in template
+    assert 'class="actions selected-product-actions"' in template
+    assert 'quantity.className = "selected-quantity-input"' in script
+    assert 'quantity.type = "number"' in script
+    assert 'quantity.name = "quantity"' in script
+    assert "quantityInput.name" not in script
+    for value in ("1", "50", "1000", "1000000"):
+        assert 1 <= int(value) <= 1000000
 
 
 def test_reversed_visual_order_move_controls_contract():
