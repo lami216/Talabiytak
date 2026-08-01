@@ -185,11 +185,18 @@ def test_search_quantity_client_side_contract():
     assert ".product-add-controls{grid-area:controls;display:flex;direction:rtl" in styles
     assert 'quantityInput.className = "product-quantity-input"' in script
     assert 'title.className = "selected-product-name"' in script
+    assert 'row.className = "selected-product-row"' in script
     assert 'quantity.className = "selected-quantity-input"' in script
     assert 'controls.className = "actions selected-product-actions"' in script
-    assert "flex:0 0 82px;width:82px" in styles
+    assert "flex:0 0 72px;width:72px;min-width:72px;max-width:72px" in styles
     assert "product-quantity-input{flex:1 1 auto" in styles
-    assert "selected-quantity-input{width:108px;min-width:96px" in styles
+    assert "selected-quantity-input{flex:0 0 112px;width:112px;min-width:112px" in styles
+    assert "flex-basis:104px;width:104px;min-width:104px" in styles
+    assert (
+        "direction:rtl;text-align:right;unicode-bidi:plaintext;"
+        "writing-mode:horizontal-tb;white-space:normal;overflow-wrap:break-word;"
+        "word-break:normal" in styles
+    )
     assert "text-align:center;direction:ltr" in styles
     assert (
         ".product-quantity-input.is-invalid{border:2px solid #d92d20;"
@@ -204,8 +211,12 @@ def test_existing_and_new_selected_quantities_share_markup_contract():
     script = Path("app/static/orders.js").read_text()
 
     assert 'class="selected-product-name"' in template
+    assert 'class="selected-product-row"' in template
     assert 'class="selected-quantity-input" type="number" name="quantity"' in template
     assert 'class="actions selected-product-actions"' in template
+    assert 'row.className = "selected-product-row"' in script
+    assert "row.append(quantity, controls)" in script
+    assert "item.append(id, title, row)" in script
     assert 'quantity.className = "selected-quantity-input"' in script
     assert 'quantity.type = "number"' in script
     assert 'quantity.name = "quantity"' in script
