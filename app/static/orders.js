@@ -158,7 +158,10 @@
             controls.append(button);
           },
         );
-        item.append(id, title, quantity, controls);
+        const row = document.createElement("div");
+        row.className = "selected-product-row";
+        row.append(quantity, controls);
+        item.append(id, title, row);
         selected.append(item);
         wire(item);
         refresh();
