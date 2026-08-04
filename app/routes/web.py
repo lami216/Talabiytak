@@ -1,4 +1,5 @@
 import math
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -7,6 +8,43 @@ from app.dependencies import csrf_ok, require_admin, session_data
 from app.services.errors import AppError, ValidationError
 
 router = APIRouter()
+
+ALLOWED_IMAGE_FILTERS = {
+    "all",
+    "unnamed",
+    "saved_as_product",
+    "ignored",
+    "duplicate",
+    "upload_failed",
+}
+IMAGES_PER_PAGE = 48
+
+
+def image_filter(value: str) -> str:
+    """Return only a known image status, never arbitrary MongoDB input."""
+    return value if value in ALLOWED_IMAGE_FILTERS else "all"
+
+
+def batch_url(import_id: str, status: str = "all", page: int | str = 1) -> str:
+    status = image_filter(status)
+    try:
+        page_number = max(1, int(page))
+    except (TypeError, ValueError):
+        page_number = 1
+    return f"/imports/{import_id}?{urlencode({'status': status, 'page': page_number})}"
+
+
+async def preserved_batch_url(request: Request, import_id: str, status: str, page: str) -> str:
+    """Build a local batch URL and clamp its page after a status-changing action."""
+    status = image_filter(status)
+    counts = await request.app.state.imports.images.status_counts(import_id)
+    total = sum(counts.values()) if status == "all" else counts.get(status, 0)
+    pages = max(1, math.ceil(total / IMAGES_PER_PAGE))
+    try:
+        page_number = min(max(1, int(page)), pages)
+    except (TypeError, ValueError):
+        page_number = 1
+    return batch_url(import_id, status, page_number)
 
 
 def render(request, name, status_code=200, **context):
@@ -113,8 +151,10 @@ async def imports(request: Request):
 async def batch_page(import_id: str, request: Request, page: int = 1, status: str = "all"):
     if isinstance(result := guard(request), RedirectResponse):
         return result
+    status = image_filter(status)
+    requested_page = max(page, 1)
     try:
-        result = await request.app.state.imports.get_batch(import_id, max(page, 1), status)
+        result = await request.app.state.imports.get_batch(import_id, requested_page, status)
     except ValidationError:
         result = None
     if not result:
@@ -122,14 +162,32 @@ async def batch_page(import_id: str, request: Request, page: int = 1, status: st
             request, "error.html", status_code=404, code=404, message="دفعة الاستيراد غير موجودة"
         )
     batch, images, counts = result
+    total = sum(counts.values()) if status == "all" else counts.get(status, 0)
+    pages = max(1, math.ceil(total / IMAGES_PER_PAGE))
+    page = min(requested_page, pages)
+    if page != requested_page:
+        batch, images, counts = await request.app.state.imports.get_batch(import_id, page, status)
     return render(
-        request, "batch.html", batch=batch, images=images, counts=counts, page=page, status=status
+        request,
+        "batch.html",
+        batch=batch,
+        images=images,
+        counts=counts,
+        total_images=sum(counts.values()),
+        page=page,
+        pages=pages,
+        status=status,
     )
 
 
 @router.post("/imports/images/{image_id}/save")
 async def save_image(
-    image_id: str, request: Request, name: str = Form(...), csrf_token: str = Form(...)
+    image_id: str,
+    request: Request,
+    name: str = Form(...),
+    csrf_token: str = Form(...),
+    return_status: str = Form("all"),
+    return_page: str = Form("1"),
 ):
     if isinstance(result := guard(request), RedirectResponse):
         return result
@@ -137,17 +195,34 @@ async def save_image(
     try:
         product = await request.app.state.products.create_from_import(image_id, name)
         image = await request.app.state.imports.get_image(image_id)
+        redirect_url = await preserved_batch_url(
+            request, image.import_id, return_status, return_page
+        )
         return (
-            JSONResponse({"ok": True, "message": "تم حفظ المنتج", "product_id": product.id})
+            JSONResponse(
+                {
+                    "ok": True,
+                    "message": "تم حفظ المنتج",
+                    "product_id": product.id,
+                    "new_status": "saved_as_product",
+                    "redirect_url": redirect_url,
+                }
+            )
             if request.headers.get("x-requested-with")
-            else RedirectResponse(f"/imports/{image.import_id}", 303)
+            else RedirectResponse(redirect_url, 303)
         )
     except AppError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, 400)
 
 
 @router.post("/imports/images/{image_id}/ignore")
-async def ignore_image(image_id: str, request: Request, csrf_token: str = Form(...)):
+async def ignore_image(
+    image_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    return_status: str = Form("all"),
+    return_page: str = Form("1"),
+):
     if isinstance(result := guard(request), RedirectResponse):
         return result
     check(request, csrf_token)
@@ -155,16 +230,29 @@ async def ignore_image(image_id: str, request: Request, csrf_token: str = Form(.
         image = await request.app.state.imports.ignore_image(image_id)
     except ValidationError:
         image = None
-    return RedirectResponse(f"/imports/{image.import_id}" if image else "/imports", 303)
+    return RedirectResponse(
+        await preserved_batch_url(request, image.import_id, return_status, return_page)
+        if image
+        else "/imports",
+        303,
+    )
 
 
 @router.post("/imports/{import_id}/cleanup")
-async def cleanup_batch(import_id: str, request: Request, csrf_token: str = Form(...)):
+async def cleanup_batch(
+    import_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    return_status: str = Form("all"),
+    return_page: str = Form("1"),
+):
     if isinstance(result := guard(request), RedirectResponse):
         return result
     check(request, csrf_token)
     await request.app.state.cleanup.cleanup_import(import_id)
-    return RedirectResponse(f"/imports/{import_id}", 303)
+    return RedirectResponse(
+        await preserved_batch_url(request, import_id, return_status, return_page), 303
+    )
 
 
 @router.get("/products", response_class=HTMLResponse)
