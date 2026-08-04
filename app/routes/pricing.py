@@ -57,7 +57,7 @@ async def pricing_transform(
         if not source or len(source) > limit:
             raise ValidationError("اختر ملف XLSX صالحًا.")
         transformed = await request.app.state.excel_pricing.transform(
-            source, rmb_rate, shipping_cost_per_cbm
+            source, rmb_rate, shipping_cost_per_cbm, filename=file.filename
         )
         download = safe_download_name(file.filename)
         ascii_name = "calculated.xlsx"
