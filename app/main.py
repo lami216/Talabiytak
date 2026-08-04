@@ -19,12 +19,14 @@ from app.repositories import (
 )
 from app.repositories.orphans import OrphanCleanupRepository
 from app.routes.orders import router as orders_router
+from app.routes.pricing import router as pricing_router
 from app.routes.web import router
 from app.security.core import Security
 from app.services.catalog import CatalogQueryService
 from app.services.cleanup import ImportCleanupService
 from app.services.errors import AppError
 from app.services.excel_export import ExcelExportService
+from app.services.excel_pricing import ExcelPricingService
 from app.services.image_processing import ImageProcessingService
 from app.services.imports import ImportService
 from app.services.orders import OrderService
@@ -64,6 +66,7 @@ def configure_services(app, database, storage):
     app.state.products = ProductService(storage, products, images, orphans, orders=orders)
     app.state.orders = OrderService(app.state.settings, orders, products)
     app.state.excel_export = ExcelExportService(app.state.settings, products)
+    app.state.excel_pricing = ExcelPricingService(app.state.settings)
     app.state.cleanup = ImportCleanupService(storage, products, images)
     app.state.catalog = CatalogQueryService(database, imports, images, products, orders)
     app.state.processor = processor
@@ -119,6 +122,7 @@ def create_app(
     app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
     app.include_router(router)
     app.include_router(orders_router)
+    app.include_router(pricing_router)
 
     @app.middleware("http")
     async def headers(request: Request, call_next):

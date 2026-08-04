@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block content %}
+<section class="card form-card pricing-card">
+  <h1>حساب أسعار ملف Excel</h1>
+  <p>ارفع ملف XLSX وأدخل القيم الخاصة بهذه العملية لتنزيل نسخة محسوبة مباشرة.</p>
+  <form action="/pricing" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <label>ملف Excel
+      <input type="file" name="file" accept=".xlsx" required>
+    </label>
+    <label>معامل تحويل RMB إلى الأوقية
+      <input type="number" name="rmb_rate" min="0.000001" step="any" inputmode="decimal" value="{{ rmb_rate or '' }}" required>
+      <small>مثال: 63 أو 65. استخدم الرقم المناسب لهذا الملف.</small>
+    </label>
+    <label>تكلفة الشحن لكل CBM
+      <input type="number" name="shipping_cost_per_cbm" min="0.000001" step="any" inputmode="decimal" value="{{ shipping_cost_per_cbm or '' }}" required>
+      <small>مثال: 60000. أدخل تكلفة الشحن التي تريد استخدامها لهذا الملف.</small>
+    </label>
+    <button type="submit">حساب وتنزيل الملف</button>
+  </form>
+</section>
+{% endblock %}
