@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import math
 import re
 import zipfile
@@ -11,6 +12,8 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from app.services.errors import ValidationError
+
+logger = logging.getLogger(__name__)
 
 OFFICE_RATE = Decimal("0.03")
 RESULT_HEADERS = ("السعر بالأوقية", "نسبة المكتب", "الشحن", "سعر الطياح")
@@ -32,11 +35,13 @@ class ExcelPricingService:
     def __init__(self, settings):
         self.settings = settings
 
-    async def transform(self, source_bytes, rmb_rate, shipping_cost_per_cbm):
+    async def transform(self, source_bytes, rmb_rate, shipping_cost_per_cbm, filename=None):
         rate = self._parameter(rmb_rate, "معامل تحويل RMB غير صالح.")
         shipping_cost = self._parameter(shipping_cost_per_cbm, "تكلفة الشحن لكل CBM غير صالحة.")
         self._validate_archive(source_bytes)
-        return await asyncio.to_thread(self._transform_sync, source_bytes, rate, shipping_cost)
+        return await asyncio.to_thread(
+            self._transform_sync, source_bytes, rate, shipping_cost, filename
+        )
 
     @staticmethod
     def _parameter(raw, message):
@@ -77,13 +82,15 @@ class ExcelPricingService:
         except (zipfile.BadZipFile, OSError) as exc:
             raise ValidationError("الملف تالف أو غير مدعوم.") from exc
 
-    def _transform_sync(self, data, rate, shipping_cost):
+    def _transform_sync(self, data, rate, shipping_cost, filename=None):
         formula_book = value_book = None
+        sheet_name = None
         try:
             formula_book = load_workbook(BytesIO(data), data_only=False, keep_links=True)
             value_book = load_workbook(BytesIO(data), data_only=True, keep_links=True)
             processed = 0
             for sheet in formula_book.worksheets:
+                sheet_name = sheet.title
                 value_sheet = value_book[sheet.title]
                 header = self._find_header(sheet)
                 if header is None:
@@ -102,7 +109,12 @@ class ExcelPricingService:
         except ValidationError:
             raise
         except Exception as exc:
-            raise ValidationError("الملف تالف أو غير مدعوم.") from exc
+            logger.exception(
+                "Unexpected Excel pricing failure (filename=%r, sheet=%r)",
+                filename,
+                sheet_name,
+            )
+            raise ValidationError("تعذر معالجة ملف Excel بسبب خطأ غير متوقع.") from exc
         finally:
             if formula_book is not None:
                 formula_book.close()
@@ -159,19 +171,71 @@ class ExcelPricingService:
         for result, columns in found.items():
             if len(columns) > 1:
                 raise ValidationError(f"عنوان النتيجة {result} مكرر في الورقة {sheet.title}.")
+        existing = [found[result][0] for result in RESULT_HEADERS if found[result]]
+        if existing and len(existing) != len(RESULT_HEADERS):
+            raise ValidationError(
+                f"عناوين النتائج غير مكتملة في الورقة {sheet.title}؛ لن تتم الكتابة فوق البيانات."
+            )
+        if existing:
+            if not self._columns_safe(sheet, existing, allow_result_headers=True, header_row=row):
+                raise ValidationError(f"أعمدة النتائج الموجودة غير آمنة في الورقة {sheet.title}.")
+            return dict(zip(RESULT_HEADERS, existing, strict=True))
+
+        # max_column includes cells which merely have formatting. Inspect actual values instead.
+        last_real = max(
+            (
+                cell.column
+                for sheet_row in sheet.iter_rows()
+                for cell in sheet_row
+                if self._has_value(cell.value)
+            ),
+            default=0,
+        )
+        start = last_real + 1
+        while not self._columns_safe(sheet, range(start, start + 4)):
+            start += 1
         result_columns = {}
         template = sheet.cell(row, last_real) if last_real else None
-        for result in RESULT_HEADERS:
-            if found[result]:
-                result_columns[result] = found[result][0]
-                continue
-            last_real += 1
-            cell = sheet.cell(row, last_real, result)
+        for offset, result in enumerate(RESULT_HEADERS):
+            column = start + offset
+            cell = sheet.cell(row, column, result)
             if template:
                 self._copy_style(template, cell)
-            sheet.column_dimensions[get_column_letter(last_real)].width = 18
-            result_columns[result] = last_real
+            sheet.column_dimensions[get_column_letter(column)].width = 18
+            result_columns[result] = column
         return result_columns
+
+    @staticmethod
+    def _has_value(value):
+        return value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+    def _columns_safe(self, sheet, columns, allow_result_headers=False, header_row=None):
+        columns = set(columns)
+        for merged in sheet.merged_cells.ranges:
+            if columns.intersection(range(merged.min_col, merged.max_col + 1)):
+                return False
+        for image in sheet._images:
+            anchor = image.anchor
+            if hasattr(anchor, "_from"):
+                end = getattr(getattr(anchor, "to", None), "col", anchor._from.col)
+                image_columns = range(anchor._from.col + 1, end + 2)
+                if columns.intersection(image_columns):
+                    return False
+        allowed = {normalize_header(value) for value in RESULT_HEADERS}
+        for column in columns:
+            for row in range(1, sheet.max_row + 1):
+                cell = sheet.cell(row, column)
+                header_allowed = (
+                    allow_result_headers
+                    and row == header_row
+                    and normalize_header(cell.value) in allowed
+                )
+                value_forbidden = self._has_value(cell.value) and not (
+                    header_allowed or allow_result_headers
+                )
+                if value_forbidden or cell.comment or cell.hyperlink:
+                    return False
+        return True
 
     def _calculate_rows(self, sheet, values, header_row, sources, results, rate, shipping_cost):
         for row in range(header_row + 1, sheet.max_row + 1):
@@ -188,44 +252,52 @@ class ExcelPricingService:
             parsed = {}
             for key in ("PRICE", "PCS", "CBM"):
                 value = raw[key]
-                if isinstance(formula[key], str) and formula[key].startswith("=") and value is None:
-                    raise ValidationError(
-                        f"الورقة {sheet.title}، الصف {row}: قيمة {key} المحسوبة غير متاحة."
-                    )
                 parsed[key] = self._cell_decimal(value, key, sheet.title, row)
             price, pcs, cbm = parsed["PRICE"], parsed["PCS"], parsed["CBM"]
-            price_ouguiya = price * rate
-            office_fee = price_ouguiya * OFFICE_RATE
-            shipping = cbm * shipping_cost / pcs
+            price_ouguiya = price * rate if price is not None else None
+            office_fee = price_ouguiya * OFFICE_RATE if price_ouguiya is not None else None
+            shipping = cbm * shipping_cost / pcs if cbm is not None and pcs and pcs > 0 else None
+            available = [
+                value for value in (price_ouguiya, office_fee, shipping) if value is not None
+            ]
             calculated = (
                 price_ouguiya,
                 office_fee,
                 shipping,
-                price_ouguiya + office_fee + shipping,
+                sum(available, Decimal(0)) if available else None,
             )
             adjacent = sheet.cell(row, max(sources.values()))
             for heading, value in zip(RESULT_HEADERS, calculated, strict=True):
                 target = sheet.cell(row, results[heading])
                 if not target.has_style:
                     self._copy_style(adjacent, target)
-                rounded = value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-                target.value = float(rounded)
-                target.number_format = "0.######"
+                if value is None:
+                    target.value = None
+                else:
+                    rounded = value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                    target.value = float(rounded)
+                    target.number_format = "0.######"
 
     @staticmethod
     def _cell_decimal(raw, name, sheet, row):
-        if isinstance(raw, bool) or raw is None:
-            raise ValidationError(f"الورقة {sheet}، الصف {row}: قيمة {name} غير صالحة.")
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.strip().upper() in {"", "-", "--", "N/A", "NA"}:
+            return None
         try:
+            if isinstance(raw, bool):
+                raise InvalidOperation
             if isinstance(raw, float) and not math.isfinite(raw):
                 raise InvalidOperation
             value = Decimal(str(raw).strip().replace(",", ""))
         except (InvalidOperation, ValueError):
-            raise ValidationError(f"الورقة {sheet}، الصف {row}: قيمة {name} غير صالحة.") from None
+            logger.warning(
+                "Non-numeric pricing value (sheet=%r, row=%d, column=%s)", sheet, row, name
+            )
+            return None
         if not value.is_finite() or value < 0:
-            raise ValidationError(f"الورقة {sheet}، الصف {row}: قيمة {name} غير صالحة.")
-        if name == "PCS" and value == 0:
-            raise ValidationError(f"الورقة {sheet}، الصف {row}: قيمة PCS تساوي صفرًا.")
+            logger.warning("Invalid pricing value (sheet=%r, row=%d, column=%s)", sheet, row, name)
+            return None
         return value
 
     @staticmethod
