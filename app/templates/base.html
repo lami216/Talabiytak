@@ -1,1 +1,36 @@
-<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title or 'إدارة صور المنتجات' }}</title><link rel="stylesheet" href="{{ url_for('static',path='/style.css') }}?v={{ asset_version('style.css') }}"></head><body>{% if session %}<header><a class="brand" href="/">إدارة صور المنتجات</a><nav><a href="/">الرئيسية</a><a href="/imports/new">رفع ملف Excel</a><a href="/imports">دفعات الاستيراد</a><a href="/products">المنتجات</a><a href="/orders">الطلبيات</a><a href="/pricing">حساب الأسعار</a><form action="/logout" method="post"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><button class="link">تسجيل الخروج</button></form></nav></header>{% endif %}<main>{% if error %}<div class="alert">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main><script src="{{ url_for('static',path='/app.js') }}?v={{ asset_version('app.js') }}" defer></script></body></html>
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title or 'إدارة صور المنتجات' }}</title>
+  <link rel="stylesheet" href="{{ url_for('static',path='/style.css') }}?v={{ asset_version('style.css') }}">
+</head>
+<body>
+{% if session %}
+{% set path = request.url.path %}
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/">إدارة صور المنتجات</a>
+    <nav class="main-nav" aria-label="التنقل الرئيسي">
+      <a class="nav-link{% if path == '/' %} nav-link-active{% endif %}" href="/"{% if path == '/' %} aria-current="page"{% endif %}>الرئيسية</a>
+      <a class="nav-link{% if path == '/imports/new' %} nav-link-active{% endif %}" href="/imports/new"{% if path == '/imports/new' %} aria-current="page"{% endif %}>رفع ملف Excel</a>
+      <a class="nav-link{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} nav-link-active{% endif %}" href="/imports"{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} aria-current="page"{% endif %}>دفعات الاستيراد</a>
+      <a class="nav-link{% if path.startswith('/products') %} nav-link-active{% endif %}" href="/products"{% if path.startswith('/products') %} aria-current="page"{% endif %}>المنتجات</a>
+      <a class="nav-link{% if path.startswith('/orders') %} nav-link-active{% endif %}" href="/orders"{% if path.startswith('/orders') %} aria-current="page"{% endif %}>الطلبيات</a>
+      <a class="nav-link{% if path.startswith('/pricing') %} nav-link-active{% endif %}" href="/pricing"{% if path.startswith('/pricing') %} aria-current="page"{% endif %}>حساب الأسعار</a>
+      <form class="logout-form" action="/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+        <button class="logout-button">تسجيل الخروج</button>
+      </form>
+    </nav>
+  </div>
+</header>
+{% endif %}
+<main>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static',path='/app.js') }}?v={{ asset_version('app.js') }}" defer></script>
+</body>
+</html>
