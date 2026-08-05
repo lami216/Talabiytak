@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{{ title or 'إدارة صور المنتجات' }}</title>
+  <title>{{ title or 'طلبياتك' }}</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#0b5d4b">
+  <meta name="application-name" content="طلبياتك">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/branding/talabiytak-favicon-32.png?v={{ asset_version('branding/talabiytak-favicon-32.png') }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/branding/talabiytak-apple-touch-180.png?v={{ asset_version('branding/talabiytak-apple-touch-180.png') }}">
   <link rel="stylesheet" href="{{ url_for('static',path='/style.css') }}?v={{ asset_version('style.css') }}">
 </head>
 <body>
@@ -11,10 +16,10 @@
 {% set path = request.url.path %}
 <header class="site-header">
   <div class="header-inner">
-    <a class="brand" href="/">إدارة صور المنتجات</a>
+    <a class="brand" href="/"><img src="/static/branding/talabiytak-logo-48.png?v={{ asset_version('branding/talabiytak-logo-48.png') }}" alt="" width="40" height="40"><span>طلبياتك</span></a>
     <nav class="main-nav" data-main-nav aria-label="التنقل الرئيسي">
       <a class="nav-link{% if path == '/' %} nav-link-active{% endif %}" href="/"{% if path == '/' %} aria-current="page" data-active-nav{% endif %}>الرئيسية</a>
-      <a class="nav-link{% if path == '/imports/new' %} nav-link-active{% endif %}" href="/imports/new"{% if path == '/imports/new' %} aria-current="page" data-active-nav{% endif %}>رفع ملف Excel</a>
+      <a class="nav-link{% if path == '/imports/new' %} nav-link-active{% endif %}" href="/imports/new"{% if path == '/imports/new' %} aria-current="page" data-active-nav{% endif %}>رفع Excel وصور</a>
       <a class="nav-link{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} nav-link-active{% endif %}" href="/imports"{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} aria-current="page" data-active-nav{% endif %}>دفعات الاستيراد</a>
       <a class="nav-link{% if path.startswith('/products') %} nav-link-active{% endif %}" href="/products"{% if path.startswith('/products') %} aria-current="page" data-active-nav{% endif %}>المنتجات</a>
       <a class="nav-link{% if path.startswith('/orders') %} nav-link-active{% endif %}" href="/orders"{% if path.startswith('/orders') %} aria-current="page" data-active-nav{% endif %}>الطلبيات</a>

@@ -1,4 +1,5 @@
 import math
+from typing import Annotated
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -141,17 +142,28 @@ async def import_new(request: Request):
 
 @router.post("/imports/new")
 async def import_create(
-    request: Request, file: UploadFile = File(...), csrf_token: str = Form(...)
+    request: Request,
+    file: Annotated[UploadFile | None, File()] = None,
+    images: Annotated[list[UploadFile] | None, File()] = None,
+    csrf_token: Annotated[str, Form()] = "",
 ):
     if isinstance(result := guard(request), RedirectResponse):
         return result
     check(request, csrf_token)
+    images = [image for image in (images or []) if image.filename]
     try:
-        item = await request.app.state.imports.import_upload(file.filename or "", file.file)
+        if not (file and file.filename) and not images:
+            raise ValidationError("اختر ملف Excel أو صورة واحدة على الأقل")
+        item = await request.app.state.imports.import_sources(
+            file.filename if file else "", file.file if file else None, images
+        )
     except AppError as exc:
         return render(request, "import_new.html", status_code=400, error=str(exc))
     finally:
-        await file.close()
+        if file:
+            await file.close()
+        for image in images:
+            await image.close()
     return RedirectResponse(f"/imports/{item.id}", 303)
 
 

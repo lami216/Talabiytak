@@ -2,6 +2,7 @@ import logging
 import os
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import PurePosixPath
 
@@ -12,29 +13,44 @@ from app.utils.objectid import new_id
 log = logging.getLogger(__name__)
 
 
+@dataclass
+class DirectImageSource:
+    filename: str
+    upload: object
+
+
 class ImportService:
     def __init__(self, settings, processor, storage, imports, images, products, orphans):
         self.settings, self.processor, self.storage = settings, processor, storage
         self.imports, self.images, self.products, self.orphans = imports, images, products, orphans
 
     async def import_upload(self, filename, upload):
-        if not filename.lower().endswith(".xlsx"):
+        return await self.import_sources(filename, upload, [])
+
+    async def import_sources(self, excel_filename=None, excel_upload=None, direct_images=None):
+        direct_images = [image for image in (direct_images or []) if getattr(image, "filename", "")]
+        excel_filename = excel_filename or ""
+        if not excel_filename and not direct_images:
+            raise ValidationError("اختر ملف Excel أو صورة واحدة على الأقل")
+        if excel_filename and not excel_filename.lower().endswith(".xlsx"):
             raise UnsafeWorkbookError("يُسمح بملفات xlsx فقط")
-        item = await self.imports.create(os.path.basename(filename))
+        batch_name = self._batch_name(excel_filename, len(direct_images))
+        item = await self.imports.create(batch_name)
         await self.imports.update_status(
             item.id, ImportStatus.processing.value, processing_state={"stage": "extracting"}
         )
         path = None
         uploaded = []
         try:
-            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as temp:
-                path, total = temp.name, 0
-                while chunk := upload.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > self.settings.max_excel_upload_mb * 1024 * 1024:
-                        raise UnsafeWorkbookError("حجم ملف Excel يتجاوز الحد المسموح")
-                    temp.write(chunk)
-            counters, uploaded = await self._process(item.id, path)
+            if excel_upload:
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as temp:
+                    path, total = temp.name, 0
+                    while chunk := excel_upload.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > self.settings.max_excel_upload_mb * 1024 * 1024:
+                            raise UnsafeWorkbookError("حجم ملف Excel يتجاوز الحد المسموح")
+                        temp.write(chunk)
+            counters, uploaded = await self._process_sources(item.id, path, direct_images)
             return await self.imports.update_status(
                 item.id,
                 ImportStatus.completed.value,
@@ -46,12 +62,20 @@ class ImportService:
             raise UnsafeWorkbookError("ملف xlsx ليس أرشيف ZIP صالحاً") from exc
         except Exception as exc:
             await self._failed(item.id, exc)
-            for file_id in uploaded:
+            for file_id in list(uploaded):
                 await self._rollback_asset(file_id, f"failed import {item.id}")
             raise
         finally:
             if path and os.path.exists(path):
                 os.unlink(path)
+
+    def _batch_name(self, excel_filename, image_count):
+        safe_excel = os.path.basename(excel_filename) if excel_filename else ""
+        if safe_excel and image_count:
+            return f"{safe_excel} + {image_count} صور مباشرة"
+        if safe_excel:
+            return safe_excel
+        return f"صور مرفوعة مباشرة — {image_count} صور"
 
     async def _failed(self, import_id, exc):
         await self.imports.update_status(
@@ -76,7 +100,62 @@ class ImportService:
         return [i for i in infos if i.filename.startswith("xl/media/") and not i.is_dir()]
 
     async def _process(self, import_id, path):
-        counters = {
+        return await self._process_sources(import_id, path, [])
+
+    async def _process_sources(self, import_id, path, direct_images):
+        counters = self._empty_counters()
+        uploaded, seen = [], {}
+        sequence = 0
+        if path:
+            with zipfile.ZipFile(path) as archive:
+                media = self._validate(archive)
+                counters["total_media_entries"] += len(media)
+                if counters["total_media_entries"] > self.settings.max_images_per_import:
+                    raise UnsafeWorkbookError("عدد الصور يتجاوز الحد المسموح")
+                for info in media:
+                    sequence += 1
+                    try:
+                        if info.file_size > self.settings.max_single_image_mb * 1024 * 1024:
+                            raise ImageProcessingError("حجم الصورة يتجاوز الحد المسموح")
+                        original_data = archive.read(info)
+                    except ImageProcessingError as exc:
+                        await self._record_failed_image(
+                            import_id, sequence, info.filename, exc, counters
+                        )
+                        continue
+                    await self._process_image_bytes(
+                        import_id=import_id,
+                        sequence_number=sequence,
+                        original_name=info.filename,
+                        original_data=original_data,
+                        seen=seen,
+                        uploaded=uploaded,
+                        counters=counters,
+                    )
+        counters["total_media_entries"] += len(direct_images)
+        if counters["total_media_entries"] > self.settings.max_images_per_import:
+            raise UnsafeWorkbookError("عدد الصور يتجاوز الحد المسموح")
+        for source in direct_images:
+            sequence += 1
+            name = self._safe_media_name(getattr(source, "filename", "image"))
+            try:
+                original_data = await self._read_direct_image(source)
+            except ImageProcessingError as exc:
+                await self._record_failed_image(import_id, sequence, name, exc, counters)
+                continue
+            await self._process_image_bytes(
+                import_id=import_id,
+                sequence_number=sequence,
+                original_name=name,
+                original_data=original_data,
+                seen=seen,
+                uploaded=uploaded,
+                counters=counters,
+            )
+        return counters, uploaded
+
+    def _empty_counters(self):
+        return {
             "total_media_entries": 0,
             "valid_images": 0,
             "uploaded_images": 0,
@@ -84,89 +163,109 @@ class ImportService:
             "skipped_images": 0,
             "failed_images": 0,
         }
-        uploaded, seen = [], {}
-        with zipfile.ZipFile(path) as archive:
-            media = self._validate(archive)
-            counters["total_media_entries"] = len(media)
-            if len(media) > self.settings.max_images_per_import:
-                raise UnsafeWorkbookError("عدد الصور يتجاوز الحد المسموح")
-            for sequence, info in enumerate(media, 1):
-                image = ImportedImage(
-                    id=new_id(),
-                    import_id=import_id,
-                    sequence_number=sequence,
-                    original_media_name=info.filename,
+
+    async def _read_direct_image(self, source):
+        limit = self.settings.max_direct_image_upload_mb * 1024 * 1024
+        data = await source.read(limit + 1)
+        if len(data) > limit:
+            raise ImageProcessingError(
+                "حجم الصورة يتجاوز الحد المسموح "
+                f"({self.settings.max_direct_image_upload_mb} ميجابايت)"
+            )
+        return data
+
+    def _safe_media_name(self, name):
+        return os.path.basename((name or "image").replace("\\", "/"))[:255] or "image"
+
+    async def _record_failed_image(self, import_id, sequence, name, exc, counters):
+        image = ImportedImage(
+            id=new_id(),
+            import_id=import_id,
+            sequence_number=sequence,
+            original_media_name=self._safe_media_name(name),
+            status=ImageStatus.invalid_image.value,
+            error_message=str(exc),
+        )
+        counters["skipped_images"] += 1
+        counters["failed_images"] += 1
+        await self.images.create(image)
+
+    async def _process_image_bytes(
+        self, *, import_id, sequence_number, original_name, original_data, seen, uploaded, counters
+    ):
+        image = ImportedImage(
+            id=new_id(),
+            import_id=import_id,
+            sequence_number=sequence_number,
+            original_media_name=self._safe_media_name(original_name),
+        )
+        try:
+            processed = self.processor.process(original_data)
+            if (
+                not processed.data
+                or len(processed.data) != len(original_data)
+                or processed.sha256 != sha256(original_data).hexdigest()
+            ):
+                raise ImageProcessingError("تغيرت بيانات الصورة الأصلية أثناء المعالجة")
+            image.hash, image.mime_type = processed.sha256, processed.mime_type
+            image.dimensions = {"width": processed.width, "height": processed.height}
+            counters["valid_images"] += 1
+            product = await self.products.find_by_hash(processed.sha256)
+            previous = seen.get(processed.sha256) or await self.images.find_duplicate_by_hash(
+                processed.sha256
+            )
+            source = product or previous
+            if source:
+                image.image_asset = source.primary_image if product else source.image_asset
+                image.status = ImageStatus.duplicate.value
+                image.duplicate_of = {
+                    "type": "product" if product else "imported_image",
+                    "id": source.id,
+                }
+                counters["duplicate_images"] += 1
+            else:
+                stored = await self.storage.upload(
+                    processed.data,
+                    processed.extension,
+                    processed.mime_type,
+                    processed.width,
+                    processed.height,
+                    purpose="import",
+                    correlation_id=f"{import_id}-{sequence_number}-{processed.sha256[:12]}",
                 )
-                try:
-                    if info.file_size > self.settings.max_single_image_mb * 1024 * 1024:
-                        raise ImageProcessingError("حجم الصورة يتجاوز الحد المسموح")
-                    original_data = archive.read(info)
-                    processed = self.processor.process(original_data)
-                    if (
-                        not processed.data
-                        or len(processed.data) != len(original_data)
-                        or processed.sha256 != sha256(original_data).hexdigest()
-                    ):
-                        raise ImageProcessingError("تغيرت بيانات الصورة الأصلية أثناء المعالجة")
-                    image.hash, image.mime_type = processed.sha256, processed.mime_type
-                    image.dimensions = {"width": processed.width, "height": processed.height}
-                    counters["valid_images"] += 1
-                    product = await self.products.find_by_hash(processed.sha256)
-                    previous = seen.get(
-                        processed.sha256
-                    ) or await self.images.find_duplicate_by_hash(processed.sha256)
-                    source = product or previous
-                    if source:
-                        image.image_asset = source.primary_image if product else source.image_asset
-                        image.status = ImageStatus.duplicate.value
-                        image.duplicate_of = {
-                            "type": "product" if product else "imported_image",
-                            "id": source.id,
-                        }
-                        counters["duplicate_images"] += 1
-                    else:
-                        stored = await self.storage.upload(
-                            processed.data,
-                            processed.extension,
-                            processed.mime_type,
-                            processed.width,
-                            processed.height,
-                            purpose="import",
-                            correlation_id=f"{import_id}-{sequence}-{processed.sha256[:12]}",
-                        )
-                        uploaded.append(stored.file_id)
-                        image.image_asset = ImageAsset(
-                            stored.file_id,
-                            stored.file_path,
-                            stored.url,
-                            stored.thumbnail_url,
-                            processed.sha256,
-                            processed.mime_type,
-                            processed.width,
-                            processed.height,
-                            stored.size if stored.size is not None else len(processed.data),
-                        )
-                        image.status = ImageStatus.unnamed.value
-                        counters["uploaded_images"] += 1
-                        seen[processed.sha256] = image
-                except ImageProcessingError as exc:
-                    image.error_message = str(exc)
-                    counters["skipped_images"] += 1
-                    counters["failed_images"] += 1
-                except Exception as exc:
-                    image.status = ImageStatus.upload_failed.value
-                    image.error_message = str(exc)
-                    counters["failed_images"] += 1
-                try:
-                    await self.images.create(image)
-                except Exception:
-                    if image.image_asset and image.image_asset.file_id in uploaded:
-                        await self._rollback_asset(
-                            image.image_asset.file_id, "imported image save failed"
-                        )
-                        uploaded.remove(image.image_asset.file_id)
-                    raise
-        return counters, uploaded
+                uploaded.append(stored.file_id)
+                image.image_asset = ImageAsset(
+                    stored.file_id,
+                    stored.file_path,
+                    stored.url,
+                    stored.thumbnail_url,
+                    processed.sha256,
+                    processed.mime_type,
+                    processed.width,
+                    processed.height,
+                    stored.size if stored.size is not None else len(processed.data),
+                )
+                image.status = ImageStatus.unnamed.value
+                counters["uploaded_images"] += 1
+                seen[processed.sha256] = image
+        except ImageProcessingError as exc:
+            image.error_message = str(exc)
+            counters["skipped_images"] += 1
+            counters["failed_images"] += 1
+        except Exception:
+            image.status = ImageStatus.upload_failed.value
+            image.error_message = "تعذر رفع الصورة أو حفظها"
+            counters["failed_images"] += 1
+            log.exception(
+                "image import failed", extra={"import_id": import_id, "sequence": sequence_number}
+            )
+        try:
+            await self.images.create(image)
+        except Exception:
+            if image.image_asset and image.image_asset.file_id in uploaded:
+                await self._rollback_asset(image.image_asset.file_id, "imported image save failed")
+                uploaded.remove(image.image_asset.file_id)
+            raise
 
     async def _rollback_asset(self, file_id, reason):
         try:

@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -35,11 +36,25 @@ from app.services.storage import ImageKitStorage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 BASE = Path(__file__).parent
-VERSIONED_ASSETS = ("style.css", "orders.js", "app.js")
+VERSIONED_ASSETS = (
+    "style.css",
+    "orders.js",
+    "app.js",
+    "manifest.webmanifest",
+    "service-worker.js",
+    "branding/talabiytak-logo-48.png",
+    "branding/talabiytak-favicon-32.png",
+    "branding/talabiytak-apple-touch-180.png",
+    "branding/talabiytak-icon-192.png",
+    "branding/talabiytak-icon-512.png",
+    "branding/talabiytak-maskable-512.png",
+)
 
 
 def _asset_version(path: Path) -> str:
     """Return a stable version that changes only when the asset contents change."""
+    if not path.exists():
+        return "missing"
     return sha256(path.read_bytes()).hexdigest()[:12]
 
 
@@ -124,6 +139,13 @@ def create_app(
     app.include_router(orders_router)
     app.include_router(pricing_router)
 
+    @app.get("/service-worker.js", include_in_schema=False)
+    async def service_worker():
+        response = FileResponse(BASE / "static" / "service-worker.js", media_type="text/javascript")
+        response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.middleware("http")
     async def headers(request: Request, call_next):
         request.state.request_id = request.headers.get("x-request-id", uuid.uuid4().hex)
@@ -141,6 +163,11 @@ def create_app(
                 "Cache-Control": "no-store",
             }
         )
+        if request.url.path == "/service-worker.js":
+            response.headers["Cache-Control"] = "no-cache"
+            response.headers["Service-Worker-Allowed"] = "/"
+        if request.url.path == "/static/manifest.webmanifest":
+            response.headers["Content-Type"] = "application/manifest+json"
         return response
 
     @app.exception_handler(AppError)

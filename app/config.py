@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
-    app_name: str = "Product Image Manager"
+    app_name: str = "طلبياتك"
     app_env: str = "production"
     debug: bool = False
     secret_key: str
@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     max_excel_upload_mb: int = 100
     max_images_per_import: int = 2000
     max_single_image_mb: int = 25
+    max_direct_image_upload_mb: int = 10
     max_uncompressed_import_mb: int = 300
     max_zip_entries: int = 10000
     image_max_width: int = 10000
