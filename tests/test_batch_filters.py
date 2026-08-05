@@ -59,10 +59,9 @@ def test_server_side_filters_counts_and_safe_status(auth):
     database.raw.imported_images.insert_one(foreign)
 
     expected = {
-        "all": 9,
+        "all": 7,
         "unnamed": 2,
         "saved_as_product": 1,
-        "ignored": 2,
         "duplicate": 3,
         "upload_failed": 1,
     }
@@ -74,9 +73,9 @@ def test_server_side_filters_counts_and_safe_status(auth):
 
     unknown = client.get(f"/imports/{import_id}?status[$ne]=x")
     assert unknown.status_code == 200
-    assert unknown.text.count('class="card image-card"') == 9
+    assert unknown.text.count('class="card image-card"') == 7
     unknown = client.get(f"/imports/{import_id}?status=not-a-status")
-    assert unknown.text.count('class="card image-card"') == 9
+    assert unknown.text.count('class="card image-card"') == 7
 
 
 def test_duplicate_creation_cases_are_not_grouped(auth):
@@ -130,16 +129,13 @@ def test_image_actions_preserve_validated_filter_and_page(auth):
     )
     unnamed_id, duplicate_id = map(lambda row: str(row["_id"]), rows)
 
-    ignored = client.post(
-        f"/imports/images/{duplicate_id}/ignore",
+    deleted = client.post(
+        f"/imports/images/{duplicate_id}/delete",
         data={"csrf_token": token, "return_status": "duplicate", "return_page": "1"},
         follow_redirects=False,
     )
-    assert ignored.headers["location"] == f"/imports/{import_id}?status=duplicate&page=1"
-    assert (
-        database.raw.imported_images.find_one({"_id": ObjectId(duplicate_id)})["status"]
-        == "ignored"
-    )
+    assert deleted.headers["location"] == f"/imports/{import_id}?status=duplicate&page=1"
+    assert database.raw.imported_images.find_one({"_id": ObjectId(duplicate_id)}) is None
 
     saved = client.post(
         f"/imports/images/{unnamed_id}/save",

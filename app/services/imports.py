@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import PurePosixPath
 
 from app.models import ImageAsset, ImageStatus, ImportedImage, ImportStatus
-from app.services.errors import ImageProcessingError, UnsafeWorkbookError
+from app.services.errors import ImageProcessingError, UnsafeWorkbookError, ValidationError
 from app.utils.objectid import new_id
 
 log = logging.getLogger(__name__)
@@ -188,11 +188,48 @@ class ImportService:
             await self.images.status_counts(import_id),
         )
 
-    async def ignore_image(self, image_id):
+    async def delete_imported_image(self, image_id):
         image = await self.images.get(image_id)
-        if image and not image.linked_product_id:
-            await self.images.update_status(image_id, ImageStatus.ignored.value)
-        return image
+        if not image:
+            raise ValidationError("الصورة غير موجودة")
+        if image.linked_product_id or image.status == ImageStatus.saved_as_product.value:
+            raise ValidationError(
+                "لا يمكن حذف هذه الصورة لأنها مرتبطة بمنتج محفوظ. "
+                "احذف المنتج من صفحة المنتجات أولًا."
+            )
+        if image.status not in {ImageStatus.unnamed.value, ImageStatus.duplicate.value}:
+            raise ValidationError("لا يمكن حذف هذه الصورة من صفحة الدفعة.")
+        import_id = image.import_id
+        file_id = image.image_asset.file_id if image.image_asset else None
+        shared_asset = True
+        storage_deleted = False
+        if file_id:
+            references = await self.products.asset_references(
+                file_id
+            ) + await self.images.asset_references(file_id, exclude_id=image.id)
+            shared_asset = references > 0
+            if not shared_asset:
+                await self.storage.delete(file_id)
+                storage_deleted = True
+        try:
+            result = await self.images.delete(image.id)
+            record_deleted = getattr(result, "deleted_count", 0) > 0
+        except Exception:
+            log.exception(
+                "Imported image record delete failed after storage cleanup",
+                extra={"image_id": image.id},
+            )
+            await self.images.mark_deleted(image.id)
+            record_deleted = True
+        return {
+            "import_id": import_id,
+            "record_deleted": record_deleted,
+            "storage_deleted": storage_deleted,
+            "shared_asset": shared_asset,
+        }
+
+    async def ignore_image(self, image_id):
+        return await self.images.get(image_id)
 
     async def get_image(self, image_id):
         return await self.images.get(image_id)

@@ -39,3 +39,4 @@ button:disabled{cursor:wait;opacity:.65}
 
 @media(min-width:900px){.header-inner{grid-template-columns:auto minmax(0,1fr);align-items:center}.main-nav{justify-content:flex-end}}
 @media(max-width:600px){.site-header{padding:.85rem 1rem}.brand{font-size:1.15rem}.main-nav{width:calc(100vw - 2rem)}.grid{grid-template-columns:1fr 1fr}}
+.danger-outline{background:#fff;color:#b42318;border:1px solid #b42318}.danger-outline:hover{background:#fee4e2}.compact{padding:.45rem .7rem;font-size:.9rem;width:auto}.delete-image-form{display:flex;justify-content:flex-start}.shared-image-product{border-top:1px solid #e5e7eb;margin-top:1rem;padding-top:1rem}

@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
 
 from app.services.errors import ValidationError
 
@@ -181,19 +182,10 @@ class ExcelPricingService:
                 raise ValidationError(f"أعمدة النتائج الموجودة غير آمنة في الورقة {sheet.title}.")
             return dict(zip(RESULT_HEADERS, existing, strict=True))
 
-        # max_column includes cells which merely have formatting. Inspect actual values instead.
-        last_real = max(
-            (
-                cell.column
-                for sheet_row in sheet.iter_rows()
-                for cell in sheet_row
-                if self._has_value(cell.value)
-            ),
-            default=0,
-        )
-        start = last_real + 1
-        while not self._columns_safe(sheet, range(start, start + 4)):
-            start += 1
+        occupied = self._occupied_columns(sheet)
+        data_columns = occupied["values"] - occupied["result_headers"]
+        last_real = max(data_columns, default=0)
+        start = self._first_safe_result_start(sheet, last_real + 1, occupied)
         result_columns = {}
         template = sheet.cell(row, last_real) if last_real else None
         for offset, result in enumerate(RESULT_HEADERS):
@@ -210,32 +202,60 @@ class ExcelPricingService:
         return value is not None and (not isinstance(value, str) or bool(value.strip()))
 
     def _columns_safe(self, sheet, columns, allow_result_headers=False, header_row=None):
-        columns = set(columns)
+        occupied = self._occupied_columns(sheet, allow_result_headers, header_row)
+        blocked = occupied["all"]
+        return not set(columns).intersection(blocked)
+
+    def _first_safe_result_start(self, sheet, start, occupied):
+        blocked = occupied["all"]
+        for column in range(max(1, start), 16384 - len(RESULT_HEADERS) + 2):
+            candidate = set(range(column, column + len(RESULT_HEADERS)))
+            if not candidate.intersection(blocked):
+                return column
+        raise ValidationError(
+            f"لا توجد أربعة أعمدة آمنة لإضافة نتائج التسعير في الورقة {sheet.title}."
+        )
+
+    def _occupied_columns(self, sheet, allow_result_headers=False, header_row=None):
+        values = set()
+        comments = set()
+        hyperlinks = set()
+        result_headers = set()
+        allowed = {normalize_header(value) for value in RESULT_HEADERS}
+        for row in sheet.iter_rows():
+            for cell in row:
+                if self._has_value(cell.value):
+                    if (
+                        allow_result_headers
+                        and cell.row == header_row
+                        and normalize_header(cell.value) in allowed
+                    ):
+                        result_headers.add(cell.column)
+                    else:
+                        values.add(cell.column)
+                if cell.comment:
+                    comments.add(cell.column)
+                if cell.hyperlink:
+                    hyperlinks.add(cell.column)
+        merged_columns = set()
         for merged in sheet.merged_cells.ranges:
-            if columns.intersection(range(merged.min_col, merged.max_col + 1)):
-                return False
+            min_col, _, max_col, _ = range_boundaries(str(merged))
+            merged_columns.update(range(min_col, max_col + 1))
+        image_columns = set()
         for image in sheet._images:
             anchor = image.anchor
             if hasattr(anchor, "_from"):
                 end = getattr(getattr(anchor, "to", None), "col", anchor._from.col)
-                image_columns = range(anchor._from.col + 1, end + 2)
-                if columns.intersection(image_columns):
-                    return False
-        allowed = {normalize_header(value) for value in RESULT_HEADERS}
-        for column in columns:
-            for row in range(1, sheet.max_row + 1):
-                cell = sheet.cell(row, column)
-                header_allowed = (
-                    allow_result_headers
-                    and row == header_row
-                    and normalize_header(cell.value) in allowed
-                )
-                value_forbidden = self._has_value(cell.value) and not (
-                    header_allowed or allow_result_headers
-                )
-                if value_forbidden or cell.comment or cell.hyperlink:
-                    return False
-        return True
+                if end == anchor._from.col:
+                    width = getattr(image, "width", 0) or 0
+                    end += max(1, math.ceil(width / 64) - 1)
+                image_columns.update(range(anchor._from.col + 1, end + 2))
+        all_columns = values | comments | hyperlinks | merged_columns | image_columns
+        return {
+            "values": values,
+            "result_headers": result_headers,
+            "all": all_columns - result_headers,
+        }
 
     def _calculate_rows(self, sheet, values, header_row, sources, results, rate, shipping_cost):
         for row in range(header_row + 1, sheet.max_row + 1):
