@@ -11,9 +11,11 @@ def test_shared_image_ui_is_discoverable_contract():
     assert 'id="shared-image-product"' in product_form
     assert "إضافة منتج آخر بنفس الصورة" in product_form
     assert "shared-image-product-form" in product_form
+    assert "إنشاء منتج بنفس الصورة" in product_form
     assert "ينشئ منتجًا مستقلًا يستخدم الصورة نفسها دون رفع الصورة مرة أخرى." in product_form
-    assert "منتج آخر بنفس الصورة" in products
-    assert "#shared-image-product" in products
+    assert "تعديل" in products
+    assert "منتج آخر بنفس الصورة" not in products
+    assert "#shared-image-product" not in products
 
 
 def test_batch_partial_and_ajax_contracts():

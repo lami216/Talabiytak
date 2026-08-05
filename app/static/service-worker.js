@@ -1,4 +1,4 @@
-const CACHE_NAME = "talabiytak-static-v1";
+const CACHE_NAME = "talabiytak-static-v2";
 const APP_CACHE_PREFIX = "talabiytak-static-";
 const STATIC_ASSETS = [
   "/static/manifest.webmanifest",
