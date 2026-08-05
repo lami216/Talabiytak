@@ -165,7 +165,16 @@ async function submitBatchForm(form) {
 document.addEventListener("submit", (event) => {
   const form = event.target;
   if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) { event.preventDefault(); return; }
-  if (form.classList.contains("upload-form")) { setBusy(form, true); const loading = form.querySelector(".loading"); if (loading) loading.hidden = false; }
+  if (form.classList.contains("upload-form")) {
+    const excel = form.querySelector("input[name='file']");
+    const images = form.querySelector("input[name='images']");
+    if (!excel?.files?.length && !images?.files?.length) {
+      event.preventDefault();
+      showNotification("اختر ملف Excel أو صورة واحدة على الأقل", "error");
+      return;
+    }
+    setBusy(form, true); const loading = form.querySelector(".loading"); if (loading) loading.hidden = false;
+  }
   if (form.classList.contains("save-product") || form.classList.contains("delete-image-form")) { event.preventDefault(); submitBatchForm(form); }
   if (form.classList.contains("shared-image-product-form")) { event.preventDefault(); submitSharedImageForm(form); }
 });
@@ -185,3 +194,18 @@ document.addEventListener("click", (event) => {
 
 window.addEventListener("popstate", () => { if (document.querySelector("[data-batch-content]")) loadBatchPartial(window.location.href, { push: false }); });
 document.addEventListener("DOMContentLoaded", () => { ensureActiveNavigationVisible(); ensureActiveBatchFilterVisible(); });
+
+
+document.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-direct-images-input]");
+  if (!input) return;
+  const count = input.files ? input.files.length : 0;
+  const label = document.querySelector("[data-direct-images-count]");
+  if (label) label.textContent = count ? `تم اختيار ${count} صور` : "";
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => undefined);
+  });
+}

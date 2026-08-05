@@ -15,3 +15,10 @@ logs/
 build/
 dist/
 *.egg-info/
+# Generated PWA branding icons; rebuild with scripts/build_web_icons.py
+app/static/branding/talabiytak-logo-48.png
+app/static/branding/talabiytak-favicon-32.png
+app/static/branding/talabiytak-apple-touch-180.png
+app/static/branding/talabiytak-icon-192.png
+app/static/branding/talabiytak-icon-512.png
+app/static/branding/talabiytak-maskable-512.png
