@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import Settings, get_settings
@@ -36,6 +37,59 @@ from app.services.storage import ImageKitStorage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 BASE = Path(__file__).parent
+
+BRANDING = BASE / "static" / "branding"
+BRANDING_SOURCE = BRANDING / "talabiytak-logo-source.png"
+BRANDING_OUTPUTS = {
+    "talabiytak-logo-48.png": 48,
+    "talabiytak-favicon-32.png": 32,
+    "talabiytak-apple-touch-180.png": 180,
+    "talabiytak-icon-192.png": 192,
+    "talabiytak-icon-512.png": 512,
+}
+BRANDING_MASKABLE = BRANDING / "talabiytak-maskable-512.png"
+
+
+def _contain_branding_icon(image: Image.Image, size: int) -> Image.Image:
+    result = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    copy = image.copy()
+    copy.thumbnail((size, size), Image.Resampling.LANCZOS)
+    result.alpha_composite(copy, ((size - copy.width) // 2, (size - copy.height) // 2))
+    return result
+
+
+def _build_maskable_branding_icon(image: Image.Image) -> Image.Image:
+    result = Image.new("RGBA", (512, 512), "#0b5d4b")
+    safe = image.copy()
+    safe.thumbnail((328, 328), Image.Resampling.LANCZOS)
+    result.alpha_composite(safe, ((512 - safe.width) // 2, (512 - safe.height) // 2))
+    return result
+
+
+def ensure_branding_assets() -> None:
+    """Build required web branding PNGs from the tracked source logo when absent."""
+    if not BRANDING_SOURCE.exists():
+        return
+    missing_assets = [
+        BRANDING / filename for filename in BRANDING_OUTPUTS if not (BRANDING / filename).is_file()
+    ]
+    if not BRANDING_MASKABLE.is_file():
+        missing_assets.append(BRANDING_MASKABLE)
+    if not missing_assets:
+        return
+    source = Image.open(BRANDING_SOURCE).convert("RGBA")
+    if source.width != source.height:
+        raise RuntimeError("talabiytak-logo-source.png must be square")
+    BRANDING.mkdir(parents=True, exist_ok=True)
+    for filename, size in BRANDING_OUTPUTS.items():
+        output = BRANDING / filename
+        if output in missing_assets:
+            _contain_branding_icon(source, size).save(output, "PNG", optimize=True)
+    if BRANDING_MASKABLE in missing_assets:
+        _build_maskable_branding_icon(source).save(BRANDING_MASKABLE, "PNG", optimize=True)
+
+
+ensure_branding_assets()
 VERSIONED_ASSETS = (
     "style.css",
     "orders.js",

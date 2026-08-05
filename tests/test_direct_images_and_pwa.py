@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from app.main import asset_version
 from app.models import ImageAsset
 from app.utils.objectid import new_id
 from tests.test_phase_one import image_bytes, xlsx
@@ -179,8 +180,8 @@ def test_direct_image_can_be_saved_and_found_in_order(auth):
 
 def test_branding_manifest_service_worker_and_icons(auth):
     client, *_ = auth
-    assert Path("app/static/branding/talabiytak-logo-source.png").exists()
-    subprocess.run([sys.executable, "scripts/build_web_icons.py"], check=True)
+    branding_dir = Path("app/static/branding")
+    assert (branding_dir / "talabiytak-logo-source.png").exists()
     sizes = {
         "talabiytak-logo-48.png": (48, 48),
         "talabiytak-favicon-32.png": (32, 32),
@@ -189,10 +190,21 @@ def test_branding_manifest_service_worker_and_icons(auth):
         "talabiytak-icon-512.png": (512, 512),
         "talabiytak-maskable-512.png": (512, 512),
     }
+    for filename in sizes:
+        asset = branding_dir / filename
+        assert asset.is_file()
+        assert asset.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+        assert not asset.read_text(encoding="utf-8", errors="ignore").startswith(
+            "version https://git-lfs.github.com/spec/"
+        )
+    subprocess.run([sys.executable, "scripts/build_web_icons.py"], check=True)
     for filename, size in sizes.items():
-        with Image.open(Path("app/static/branding") / filename) as image:
+        with Image.open(branding_dir / filename) as image:
             assert image.format == "PNG" and image.size == size
-        assert client.get(f"/static/branding/{filename}").status_code == 200
+        response = client.get(f"/static/branding/{filename}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+    assert asset_version("branding/talabiytak-logo-48.png") != "missing"
     html = client.get("/").text
     assert "طلبياتك" in html
     assert "إدارة صور المنتجات" not in html
@@ -211,5 +223,15 @@ def test_branding_manifest_service_worker_and_icons(auth):
     assert sw.headers["service-worker-allowed"] == "/"
     assert "serviceWorker.register" in client.get("/static/app.js").text
     assert "unsafe-inline" not in client.get("/").headers["content-security-policy"]
+    assert "talabiytak-static-v2" in sw.text
     assert "STATIC_ASSETS" in sw.text
+    static_assets = [
+        "/static/manifest.webmanifest",
+        "/static/style.css",
+        "/static/app.js",
+        *[f"/static/branding/{filename}" for filename in sizes],
+    ]
+    for asset_path in static_assets:
+        assert asset_path in sw.text
+        assert client.get(asset_path).status_code == 200
     assert "/products" not in sw.text and "/orders" not in sw.text and "/login" not in sw.text
