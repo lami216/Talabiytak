@@ -92,7 +92,9 @@ class ImportedImagesRepository:
 
     async def list_images(self, import_id, status="all", page=1, size=48):
         query = {"import_id": oid(import_id, "معرّف الاستيراد")}
-        if status != "all":
+        if status == "all":
+            query["status"] = {"$nin": ["ignored", "deleted"]}
+        else:
             query["status"] = status
         cursor = (
             self.collection.find(query)
@@ -106,7 +108,12 @@ class ImportedImagesRepository:
     async def status_counts(self, import_id):
         cursor = await self.collection.aggregate(
             [
-                {"$match": {"import_id": oid(import_id)}},
+                {
+                    "$match": {
+                        "import_id": oid(import_id),
+                        "status": {"$nin": ["ignored", "deleted"]},
+                    }
+                },
                 {"$group": {"_id": "$status", "count": {"$sum": 1}}},
             ]
         )
@@ -116,8 +123,17 @@ class ImportedImagesRepository:
     async def count(self, status=None):
         return await self.collection.count_documents({"status": status} if status else {})
 
+    async def delete(self, image_id):
+        return await self.collection.delete_one({"_id": oid(image_id)})
+
+    async def mark_deleted(self, image_id):
+        return await self.collection.update_one(
+            {"_id": oid(image_id)},
+            {"$set": {"status": "deleted", "image_asset": None, "updated_at": now()}},
+        )
+
     async def asset_references(self, file_id, exclude_id=None):
-        query = {"image_asset.file_id": file_id, "status": {"$ne": "deleted"}}
+        query = {"image_asset.file_id": file_id, "status": {"$nin": ["deleted", "ignored"]}}
         if exclude_id:
             query["_id"] = {"$ne": oid(exclude_id)}
         return await self.collection.count_documents(query)

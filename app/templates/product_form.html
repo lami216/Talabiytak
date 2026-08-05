@@ -1,1 +1,28 @@
-{% extends 'base.html' %}{% block content %}<h1>{{ 'تعديل المنتج' if product else 'إضافة منتج' }}</h1><section class="card form-card">{% if product %}<img src="{{ product.image_url }}" alt="{{ product.name }}">{% endif %}<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><label>اسم المنتج<input name="name" value="{{ product.name if product else '' }}" required maxlength="300"></label><label>{{ 'استبدال الصورة (اختياري)' if product else 'صورة المنتج' }}<input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" {{ '' if product else 'required' }}></label><button>حفظ</button></form>{% if product %}<form method="post" action="/products/{{ product.id }}/delete" data-confirm="هل أنت متأكد من حذف المنتج؟"><input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="confirm" value="delete"><button class="danger">حذف المنتج</button></form>{% endif %}</section>{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<h1>{{ 'تعديل المنتج' if product else 'إضافة منتج' }}</h1>
+<section class="card form-card">
+  {% if product %}<img src="{{ product.image_url }}" alt="{{ product.name }}">{% endif %}
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <label>اسم المنتج<input name="name" value="{{ product.name if product else '' }}" required maxlength="300"></label>
+    <label>{{ 'استبدال الصورة (اختياري)' if product else 'صورة المنتج' }}<input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" {{ '' if product else 'required' }}></label>
+    <button>حفظ</button>
+  </form>
+  {% if product %}
+  <section class="shared-image-product">
+    <h2>إضافة منتج آخر بنفس الصورة</h2>
+    <form method="post" action="/products/{{ product.id }}/create-with-same-image">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+      <label>اسم المنتج الجديد<input name="name" required maxlength="300"></label>
+      <button>إنشاء منتج بنفس الصورة</button>
+    </form>
+  </section>
+  <form method="post" action="/products/{{ product.id }}/delete" data-confirm="هل أنت متأكد من حذف المنتج؟">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+    <input type="hidden" name="confirm" value="delete">
+    <button class="danger">حذف المنتج</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

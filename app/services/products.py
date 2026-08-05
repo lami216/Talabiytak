@@ -116,6 +116,18 @@ class ProductService:
         product.normalized_name = self.normalizer.normalize(product.name)
         return await self.products.update(product)
 
+    async def create_with_existing_image(self, source_product_id, name):
+        name = self._name(name)
+        source = await self._required(source_product_id)
+        product = Product(
+            new_id(),
+            name,
+            self.normalizer.normalize(name),
+            ImageAsset(**source.primary_image.__dict__),
+            {"source": "shared_product_image", "source_product_id": source.id},
+        )
+        return await self.products.create(product)
+
     async def replace(self, product_id, processed):
         product = await self._required(product_id)
         stored = await self.storage.upload(

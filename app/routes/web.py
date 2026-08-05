@@ -13,7 +13,6 @@ ALLOWED_IMAGE_FILTERS = {
     "all",
     "unnamed",
     "saved_as_product",
-    "ignored",
     "duplicate",
     "upload_failed",
 }
@@ -38,7 +37,10 @@ async def preserved_batch_url(request: Request, import_id: str, status: str, pag
     """Build a local batch URL and clamp its page after a status-changing action."""
     status = image_filter(status)
     counts = await request.app.state.imports.images.status_counts(import_id)
-    total = sum(counts.values()) if status == "all" else counts.get(status, 0)
+    visible_counts = {
+        key: value for key, value in counts.items() if key not in {"ignored", "deleted"}
+    }
+    total = sum(visible_counts.values()) if status == "all" else visible_counts.get(status, 0)
     pages = max(1, math.ceil(total / IMAGES_PER_PAGE))
     try:
         page_number = min(max(1, int(page)), pages)
@@ -162,7 +164,10 @@ async def batch_page(import_id: str, request: Request, page: int = 1, status: st
             request, "error.html", status_code=404, code=404, message="دفعة الاستيراد غير موجودة"
         )
     batch, images, counts = result
-    total = sum(counts.values()) if status == "all" else counts.get(status, 0)
+    visible_counts = {
+        key: value for key, value in counts.items() if key not in {"ignored", "deleted"}
+    }
+    total = sum(visible_counts.values()) if status == "all" else visible_counts.get(status, 0)
     pages = max(1, math.ceil(total / IMAGES_PER_PAGE))
     page = min(requested_page, pages)
     if page != requested_page:
@@ -172,8 +177,8 @@ async def batch_page(import_id: str, request: Request, page: int = 1, status: st
         "batch.html",
         batch=batch,
         images=images,
-        counts=counts,
-        total_images=sum(counts.values()),
+        counts=visible_counts,
+        total_images=sum(visible_counts.values()),
         page=page,
         pages=pages,
         status=status,
@@ -215,11 +220,11 @@ async def save_image(
         return JSONResponse({"ok": False, "message": str(exc)}, 400)
 
 
-@router.post("/imports/images/{image_id}/ignore")
-async def ignore_image(
+@router.post("/imports/images/{image_id}/delete")
+async def delete_imported_image(
     image_id: str,
     request: Request,
-    csrf_token: str = Form(...),
+    csrf_token: str = Form(""),
     return_status: str = Form("all"),
     return_page: str = Form("1"),
 ):
@@ -227,15 +232,19 @@ async def ignore_image(
         return result
     check(request, csrf_token)
     try:
-        image = await request.app.state.imports.ignore_image(image_id)
-    except ValidationError:
-        image = None
-    return RedirectResponse(
-        await preserved_batch_url(request, image.import_id, return_status, return_page)
-        if image
-        else "/imports",
-        303,
-    )
+        result = await request.app.state.imports.delete_imported_image(image_id)
+        redirect_url = await preserved_batch_url(
+            request, result["import_id"], return_status, return_page
+        )
+        return RedirectResponse(redirect_url, 303)
+    except AppError:
+        image = await request.app.state.imports.get_image(image_id)
+        redirect_url = (
+            await preserved_batch_url(request, image.import_id, return_status, return_page)
+            if image
+            else "/imports"
+        )
+        return RedirectResponse(redirect_url, 303)
 
 
 @router.post("/imports/{import_id}/cleanup")
@@ -344,6 +353,27 @@ async def product_update(
     finally:
         if image:
             await image.close()
+
+
+@router.post("/products/{product_id}/create-with-same-image")
+async def product_create_with_same_image(
+    product_id: str, request: Request, name: str = Form(...), csrf_token: str = Form(...)
+):
+    if isinstance(result := guard(request), RedirectResponse):
+        return result
+    check(request, csrf_token)
+    try:
+        product = await request.app.state.products.create_with_existing_image(product_id, name)
+        return RedirectResponse(f"/products/{product.id}/edit", 303)
+    except AppError as exc:
+        source = await request.app.state.products.get(product_id)
+        return render(
+            request,
+            "product_form.html",
+            status_code=400,
+            product=source,
+            error=str(exc),
+        )
 
 
 @router.post("/products/{product_id}/delete")

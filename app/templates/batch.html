@@ -16,7 +16,6 @@
   ('all','الكل',total_images),
   ('unnamed','غير مسماة',counts.get('unnamed',0)),
   ('saved_as_product','محفوظة',counts.get('saved_as_product',0)),
-  ('ignored','متجاهلة',counts.get('ignored',0)),
   ('duplicate','مكررة',counts.get('duplicate',0)),
   ('upload_failed','فاشلة',counts.get('upload_failed',0))
 ] %}
@@ -26,13 +25,6 @@
   </a>
 {% endfor %}
 </nav>
-
-<form method="post" action="/imports/{{ batch.id }}/cleanup" data-confirm="هل تريد حذف الصور غير المستخدمة من ImageKit؟">
-  <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
-  <input type="hidden" name="return_status" value="{{ status }}">
-  <input type="hidden" name="return_page" value="{{ page }}">
-  <button class="danger">حذف الصور غير المستخدمة من ImageKit</button>
-</form>
 
 <div class="grid">
 {% for i in images %}
@@ -49,16 +41,16 @@
       <input name="name" placeholder="اسم المنتج" required>
       <button>حفظ كمنتج</button>
     </form>
-    <form method="post" action="/imports/images/{{ i.id }}/ignore">
+    <form class="delete-image-form" method="post" action="/imports/images/{{ i.id }}/delete" data-confirm="هل تريد حذف هذه الصورة؟ لا يمكن التراجع عن هذه العملية.">
       <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
       <input type="hidden" name="return_status" value="{{ status }}">
       <input type="hidden" name="return_page" value="{{ page }}">
-      <button class="secondary">تجاهل</button>
+      <button class="danger-outline compact">حذف الصورة</button>
     </form>
     {% endif %}
   </article>
 {% else %}
-  {% set empty_labels = {'all':'صور في هذه الدفعة','unnamed':'صور غير مسماة','saved_as_product':'صور محفوظة','ignored':'صور متجاهلة','duplicate':'صور مكررة','upload_failed':'صور فاشلة'} %}
+  {% set empty_labels = {'all':'صور في هذه الدفعة','unnamed':'صور غير مسماة','saved_as_product':'صور محفوظة','duplicate':'صور مكررة','upload_failed':'صور فاشلة'} %}
   <section class="card empty-filter">
     <h2>لا توجد {{ empty_labels.get(status, 'صور') }}.</h2>
     {% if status != 'all' %}<a class="button" href="?status=all&amp;page=1">عرض كل الصور</a>{% endif %}
