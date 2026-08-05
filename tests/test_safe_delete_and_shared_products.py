@@ -202,7 +202,10 @@ def test_shared_product_creation_search_order_excel_and_delete(auth):
 
 
 def test_batch_and_product_form_contracts():
-    batch = open("app/templates/batch.html", encoding="utf-8").read()
+    batch = (
+        open("app/templates/batch.html", encoding="utf-8").read()
+        + open("app/templates/partials/batch_content.html", encoding="utf-8").read()
+    )
     assert "حذف الصور غير المستخدمة من ImageKit" not in batch
     assert "تجاهل" not in batch
     assert "متجاهلة" not in batch
@@ -213,3 +216,58 @@ def test_batch_and_product_form_contracts():
     product_form = open("app/templates/product_form.html", encoding="utf-8").read()
     assert "إضافة منتج آخر بنفس الصورة" in product_form
     assert "إنشاء منتج بنفس الصورة" in product_form
+
+
+def test_shared_product_ajax_json_contract(auth):
+    client, app, fake, _, token, _database = auth
+    original = Product(new_id(), "قفل 50", "قفل 50", asset("ajax-locks"))
+    client.portal.call(app.state.repositories.products.create, original)
+    before_uploads = len(fake.files.uploads)
+    response = client.post(
+        f"/products/{original.id}/create-with-same-image",
+        data={"csrf_token": token, "name": "قفل 60"},
+        headers={"X-Requested-With": "fetch"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["product"]["name"] == "قفل 60"
+    assert payload["product"]["edit_url"].endswith("/edit")
+    created = client.portal.call(app.state.repositories.products.get, payload["product"]["id"])
+    assert created.id != original.id
+    assert created.primary_image.file_id == original.primary_image.file_id
+    assert len(fake.files.uploads) == before_uploads
+
+
+def test_batch_partial_get_and_delete_ajax_contract(auth):
+    client, app, fake, _, token, _database = auth
+    image = ImportedImage(
+        new_id(),
+        "",
+        1,
+        "one.png",
+        status=ImageStatus.unnamed.value,
+        image_asset=asset("ajax-delete"),
+    )
+    batch, image = client.portal.call(add_import, app, image)
+    full = client.get(f"/imports/{batch.id}?status=invalid&page=-5")
+    assert full.status_code == 200
+    assert "<!doctype html>" in full.text
+    partial = client.get(
+        f"/imports/{batch.id}?status=invalid&page=-5", headers={"X-Requested-With": "fetch"}
+    )
+    assert partial.status_code == 200
+    payload = partial.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "all"
+    assert payload["page"] == 1
+    assert "batch-filters" in payload["html"]
+    deleted = client.post(
+        f"/imports/images/{image.id}/delete",
+        data={"csrf_token": token, "return_status": "unnamed", "return_page": "1"},
+        headers={"X-Requested-With": "fetch"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["result"]["storage_deleted"] is True
+    assert fake.files.deleted == [{"file_id": "ajax-delete"}]

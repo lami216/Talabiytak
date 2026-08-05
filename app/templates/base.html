@@ -12,13 +12,13 @@
 <header class="site-header">
   <div class="header-inner">
     <a class="brand" href="/">إدارة صور المنتجات</a>
-    <nav class="main-nav" aria-label="التنقل الرئيسي">
-      <a class="nav-link{% if path == '/' %} nav-link-active{% endif %}" href="/"{% if path == '/' %} aria-current="page"{% endif %}>الرئيسية</a>
-      <a class="nav-link{% if path == '/imports/new' %} nav-link-active{% endif %}" href="/imports/new"{% if path == '/imports/new' %} aria-current="page"{% endif %}>رفع ملف Excel</a>
-      <a class="nav-link{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} nav-link-active{% endif %}" href="/imports"{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} aria-current="page"{% endif %}>دفعات الاستيراد</a>
-      <a class="nav-link{% if path.startswith('/products') %} nav-link-active{% endif %}" href="/products"{% if path.startswith('/products') %} aria-current="page"{% endif %}>المنتجات</a>
-      <a class="nav-link{% if path.startswith('/orders') %} nav-link-active{% endif %}" href="/orders"{% if path.startswith('/orders') %} aria-current="page"{% endif %}>الطلبيات</a>
-      <a class="nav-link{% if path.startswith('/pricing') %} nav-link-active{% endif %}" href="/pricing"{% if path.startswith('/pricing') %} aria-current="page"{% endif %}>حساب الأسعار</a>
+    <nav class="main-nav" data-main-nav aria-label="التنقل الرئيسي">
+      <a class="nav-link{% if path == '/' %} nav-link-active{% endif %}" href="/"{% if path == '/' %} aria-current="page" data-active-nav{% endif %}>الرئيسية</a>
+      <a class="nav-link{% if path == '/imports/new' %} nav-link-active{% endif %}" href="/imports/new"{% if path == '/imports/new' %} aria-current="page" data-active-nav{% endif %}>رفع ملف Excel</a>
+      <a class="nav-link{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} nav-link-active{% endif %}" href="/imports"{% if (path == '/imports' or path.startswith('/imports/')) and path != '/imports/new' %} aria-current="page" data-active-nav{% endif %}>دفعات الاستيراد</a>
+      <a class="nav-link{% if path.startswith('/products') %} nav-link-active{% endif %}" href="/products"{% if path.startswith('/products') %} aria-current="page" data-active-nav{% endif %}>المنتجات</a>
+      <a class="nav-link{% if path.startswith('/orders') %} nav-link-active{% endif %}" href="/orders"{% if path.startswith('/orders') %} aria-current="page" data-active-nav{% endif %}>الطلبيات</a>
+      <a class="nav-link{% if path.startswith('/pricing') %} nav-link-active{% endif %}" href="/pricing"{% if path.startswith('/pricing') %} aria-current="page" data-active-nav{% endif %}>حساب الأسعار</a>
       <form class="logout-form" action="/logout" method="post">
         <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
         <button class="logout-button">تسجيل الخروج</button>

@@ -1,0 +1,35 @@
+<div class="stats batch-stats">
+  <div><b>{{ total_images }}</b><span>كل سجلات الصور</span></div>
+  <div><b>{{ batch.uploaded_images }}</b><span>مرفوعة</span></div>
+  <div><b>{{ counts.get('unnamed',0) }}</b><span>غير مسماة</span></div>
+  <div><b>{{ counts.get('saved_as_product',0) }}</b><span>محفوظة</span></div>
+  <div><b>{{ counts.get('duplicate',0) }}</b><span>مكررة</span></div>
+  <div><b>{{ counts.get('upload_failed',0) }}</b><span>فاشلة</span></div>
+</div>
+<nav class="batch-filters" data-batch-filters aria-label="تصفية صور الدفعة">
+{% for key,label,count in [('all','الكل',total_images),('unnamed','غير مسماة',counts.get('unnamed',0)),('saved_as_product','محفوظة',counts.get('saved_as_product',0)),('duplicate','مكررة',counts.get('duplicate',0)),('upload_failed','فاشلة',counts.get('upload_failed',0))] %}
+  <a class="filter-button{% if status == key %} filter-button-active{% endif %}" href="?status={{ key }}&amp;page=1"{% if status == key %} aria-current="page" data-active-filter{% endif %}><span>{{ label }}</span><b class="filter-count">{{ count }}</b></a>
+{% endfor %}
+</nav>
+<div class="grid" data-batch-grid>
+{% for i in images %}
+  <article class="card image-card" data-image-card data-image-id="{{ i.id }}">
+    {% if i.image_asset %}<img src="{{ i.image_url }}" alt="الصورة {{ i.sequence_number }}">{% else %}<div class="missing">لا توجد معاينة</div>{% endif %}
+    <small>رقم {{ i.sequence_number }} — <span data-image-status>{{ i.status }}</span></small>
+    {% if i.error_message %}<p class="error">{{ i.error_message }}</p>{% endif %}
+    {% if i.status in ['unnamed','duplicate'] %}
+    <form class="save-product" method="post" action="/imports/images/{{ i.id }}/save">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="return_status" value="{{ status }}"><input type="hidden" name="return_page" value="{{ page }}">
+      <input name="name" placeholder="اسم المنتج" required><button>حفظ كمنتج</button>
+    </form>
+    <form class="delete-image-form" method="post" action="/imports/images/{{ i.id }}/delete" data-confirm="هل تريد حذف هذه الصورة؟ لا يمكن التراجع عن هذه العملية.">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf }}"><input type="hidden" name="return_status" value="{{ status }}"><input type="hidden" name="return_page" value="{{ page }}"><button class="danger-outline compact">حذف الصورة</button>
+    </form>
+    {% endif %}
+  </article>
+{% else %}
+  {% set empty_labels = {'all':'صور في هذه الدفعة','unnamed':'صور غير مسماة','saved_as_product':'صور محفوظة','duplicate':'صور مكررة','upload_failed':'صور فاشلة'} %}
+  <section class="card empty-filter"><h2>لا توجد {{ empty_labels.get(status, 'صور') }}.</h2>{% if status != 'all' %}<a class="button filter-button" href="?status=all&amp;page=1">عرض كل الصور</a>{% endif %}</section>
+{% endfor %}
+</div>
+{% if pages > 1 %}<nav class="pagination" data-batch-pagination aria-label="صفحات الصور">{% if page > 1 %}<a class="button secondary" href="?status={{ status }}&amp;page={{ page - 1 }}">السابق</a>{% endif %}<span>صفحة {{ page }} من {{ pages }}</span>{% if page < pages %}<a class="button secondary" href="?status={{ status }}&amp;page={{ page + 1 }}">التالي</a>{% endif %}</nav>{% endif %}
