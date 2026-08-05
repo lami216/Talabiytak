@@ -49,6 +49,19 @@ async def preserved_batch_url(request: Request, import_id: str, status: str, pag
     return batch_url(import_id, status, page_number)
 
 
+def is_fetch(request: Request) -> bool:
+    return request.headers.get("x-requested-with") == "fetch"
+
+
+def product_payload(product):
+    return {
+        "id": product.id,
+        "name": product.name,
+        "edit_url": f"/products/{product.id}/edit",
+        "image_url": product.image_url,
+    }
+
+
 def render(request, name, status_code=200, **context):
     return request.app.state.templates.TemplateResponse(
         request=request,
@@ -172,17 +185,29 @@ async def batch_page(import_id: str, request: Request, page: int = 1, status: st
     page = min(requested_page, pages)
     if page != requested_page:
         batch, images, counts = await request.app.state.imports.get_batch(import_id, page, status)
-    return render(
-        request,
-        "batch.html",
-        batch=batch,
-        images=images,
-        counts=visible_counts,
-        total_images=sum(visible_counts.values()),
-        page=page,
-        pages=pages,
-        status=status,
-    )
+    context = {
+        "batch": batch,
+        "images": images,
+        "counts": visible_counts,
+        "total_images": sum(visible_counts.values()),
+        "page": page,
+        "pages": pages,
+        "status": status,
+    }
+    if is_fetch(request):
+        template = request.app.state.templates.get_template("partials/batch_content.html")
+        html = template.render({"request": request, "session": session_data(request), **context})
+        return JSONResponse(
+            {
+                "ok": True,
+                "html": html,
+                "url": batch_url(import_id, status, page),
+                "status": status,
+                "page": page,
+                "pages": pages,
+            }
+        )
+    return render(request, "batch.html", **context)
 
 
 @router.post("/imports/images/{image_id}/save")
@@ -209,6 +234,7 @@ async def save_image(
                     "ok": True,
                     "message": "تم حفظ المنتج",
                     "product_id": product.id,
+                    "product": product_payload(product),
                     "new_status": "saved_as_product",
                     "redirect_url": redirect_url,
                 }
@@ -236,14 +262,27 @@ async def delete_imported_image(
         redirect_url = await preserved_batch_url(
             request, result["import_id"], return_status, return_page
         )
+        if is_fetch(request):
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "message": "تم حذف الصورة.",
+                    "redirect_url": redirect_url,
+                    "result": result,
+                }
+            )
         return RedirectResponse(redirect_url, 303)
-    except AppError:
+    except AppError as exc:
         image = await request.app.state.imports.get_image(image_id)
         redirect_url = (
             await preserved_batch_url(request, image.import_id, return_status, return_page)
             if image
             else "/imports"
         )
+        if is_fetch(request):
+            return JSONResponse(
+                {"ok": False, "message": str(exc), "redirect_url": redirect_url}, 400
+            )
         return RedirectResponse(redirect_url, 303)
 
 
@@ -364,8 +403,18 @@ async def product_create_with_same_image(
     check(request, csrf_token)
     try:
         product = await request.app.state.products.create_with_existing_image(product_id, name)
+        if is_fetch(request):
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "message": "تم إنشاء المنتج بنفس الصورة.",
+                    "product": product_payload(product),
+                }
+            )
         return RedirectResponse(f"/products/{product.id}/edit", 303)
     except AppError as exc:
+        if is_fetch(request):
+            return JSONResponse({"ok": False, "message": str(exc)}, 400)
         source = await request.app.state.products.get(product_id)
         return render(
             request,
